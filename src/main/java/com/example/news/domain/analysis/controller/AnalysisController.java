@@ -29,11 +29,11 @@ public class AnalysisController {
     @PostMapping("/analyze/{youtubeVideoId}")
     public ApiResponse<AnalysisJobResponse> analyze(
             @PathVariable String youtubeVideoId) {
-        YoutubeTranscript transcript = youtubeTranscriptService.getOrFetchTranscriptEntity(youtubeVideoId);
+        YoutubeTranscript transcript = youtubeTranscriptService.getOrFetchTranscriptEntity(youtubeVideoId, true);
         if (transcript == null || transcript.getTranscriptText() == null) {
             throw new CustomException(YoutubeErrorCode.TRANSCRIPT_NOT_AVAILABLE);
         }
-        AnalysisJob job = analysisService.createAnalysisJobFromRawText(transcript);
+        AnalysisJob job = analysisService.getOrCreateAnalysisJob(transcript);
         return ApiResponse.ok(new AnalysisJobResponse(
                 job.getId(),
                 job.getTargetId(),

@@ -37,6 +37,11 @@ youtube:
 
 ai-pipeline:
   base-url: ${AI_PIPELINE_URL:http://localhost:8000}
+  transcript:
+    min-call-interval-ms: ${AI_TRANSCRIPT_MIN_CALL_INTERVAL_MS:450}
+    max-retries: ${AI_TRANSCRIPT_MAX_RETRIES:3}
+    initial-backoff-ms: ${AI_TRANSCRIPT_INITIAL_BACKOFF_MS:700}
+    no-transcript-cooldown-ms: ${AI_TRANSCRIPT_NO_TRANSCRIPT_COOLDOWN_MS:900000}
 
 kakao:
   client-id: ${KAKAO_CLIENT_ID}
