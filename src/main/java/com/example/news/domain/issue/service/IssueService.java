@@ -210,10 +210,10 @@ public class IssueService {
                 .findTopByTargetIdAndTargetTypeOrderByCreatedAtDesc(videoId, TargetType.YOUTUBE_VIDEO)
                 .orElseThrow(() -> new IssueException(IssueErrorCode.ANALYSIS_NOT_COMPLETED));
 
-        if (myResult.getOpinionScore() == null) {
+        if (myResult.getOverallBiasScore() == null) {
             throw new IssueException(IssueErrorCode.ANALYSIS_NOT_COMPLETED);
         }
-        double myOpinionScore = myResult.getOpinionScore();
+        double myBiasScore = myResult.getOverallBiasScore();
 
         // 같은 클러스터 내 후보 수집
         Set<Long> clusterIds = issueClusterItemRepository.findByYoutubeVideoId(videoId)
@@ -238,15 +238,15 @@ public class IssueService {
             throw new IssueException(IssueErrorCode.OPPOSING_VIDEO_NOT_FOUND);
         }
 
-        // opinionScore 차이 최대인 영상 선정
+        // overallBiasScore 차이 최대인 영상 선정
         BiasAnalysisResult opposing = biasAnalysisResultRepository
                 .findByTargetTypeAndTargetIdIn(TargetType.YOUTUBE_VIDEO, candidateVideoIds)
                 .stream()
-                .filter(r -> r.getOpinionScore() != null)
+                .filter(r -> r.getOverallBiasScore() != null && r.getOverallBiasScore() > 0.0)
                 .max(Comparator
                         .comparingDouble((BiasAnalysisResult r) ->
-                                Math.abs(myOpinionScore - r.getOpinionScore()))
-                        .thenComparingDouble(r -> r.getOverallBiasScore() != null ? r.getOverallBiasScore() : 0.0))
+                                Math.abs(myBiasScore - r.getOverallBiasScore()))
+                        .thenComparingDouble(r -> r.getOpinionScore() != null ? r.getOpinionScore() : 0.0))
                 .orElseThrow(() -> new IssueException(IssueErrorCode.OPPOSING_VIDEO_NOT_FOUND));
 
         YoutubeVideo opposingVideo = youtubeVideoRepository.findById(opposing.getTargetId())
@@ -258,7 +258,7 @@ public class IssueService {
                 .map(k -> k.getKeywordText())
                 .toList();
 
-        double opinionGap = Math.abs(myOpinionScore - opposing.getOpinionScore());
+        double opinionGap = Math.abs(myBiasScore - opposing.getOverallBiasScore());
 
         return OpposingVideoResponseDto.builder()
                 .youtubeVideoId(opposingVideo.getYoutubeVideoId())

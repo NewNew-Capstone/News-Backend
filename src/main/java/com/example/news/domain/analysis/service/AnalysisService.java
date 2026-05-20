@@ -66,7 +66,24 @@ public class AnalysisService {
     private String pythonBaseUrl;
 
     @Transactional
+    public AnalysisJob getOrCreateAnalysisJob(YoutubeTranscript transcript) {
+        Long videoId = transcript.getYoutubeVideo().getId();
+        Optional<BiasAnalysisResult> existing = biasAnalysisResultRepository
+                .findTopByTargetIdAndTargetTypeOrderByCreatedAtDesc(videoId, TargetType.YOUTUBE_VIDEO);
+        if (existing.isPresent() && existing.get().getAnalysisJob() != null) {
+            log.info("분석 결과 캐시 히트 - videoId={}, jobId={}", videoId, existing.get().getAnalysisJob().getId());
+            return existing.get().getAnalysisJob();
+        }
+        return createAnalysisJobFromRawText(transcript, true);
+    }
+
+    @Transactional
     public AnalysisJob createAnalysisJobFromRawText(YoutubeTranscript transcript) {
+        return createAnalysisJobFromRawText(transcript, false);
+    }
+
+    @Transactional
+    public AnalysisJob createAnalysisJobFromRawText(YoutubeTranscript transcript, boolean priority) {
 
         Long transcriptId = transcript.getId();
         Long youtubeVideoId = transcript.getYoutubeVideo().getId();
@@ -94,7 +111,8 @@ public class AnalysisService {
                     transcript.getTranscriptText(),
                     "YOUTUBE_VIDEO",
                     transcriptId,
-                    transcript.getYoutubeVideo().getCountryCode());
+                    transcript.getYoutubeVideo().getCountryCode(),
+                    priority);
 
             BiasAnalysisResultResponse result = webClient.post()
                     .uri(pythonBaseUrl + "/analyze/raw")
@@ -255,6 +273,10 @@ public class AnalysisService {
         try {
             YoutubeTranscript transcript =
                     youtubeTranscriptService.getOrFetchTranscriptEntity(videoOpt.get().getYoutubeVideoId());
+            if (transcript == null) {
+                log.warn("백그라운드 분석 스킵 - 자막 없음 (videoId={})", videoId);
+                return;
+            }
             createAnalysisJobFromRawText(transcript);
         } catch (Exception e) {
             log.warn("백그라운드 분석 실패 (videoId={}): {}", videoId, e.getMessage());

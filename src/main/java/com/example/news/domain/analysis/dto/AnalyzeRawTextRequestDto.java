@@ -12,5 +12,6 @@ public record AnalyzeRawTextRequestDto(
         String rawText,
         @Nullable String targetType,
         @Nullable Long transcriptId,
-        @Nullable String country
+        @Nullable String country,
+        boolean priority
 ) {}
