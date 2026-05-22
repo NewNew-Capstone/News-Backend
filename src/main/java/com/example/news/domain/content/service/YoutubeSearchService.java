@@ -7,6 +7,9 @@ import com.example.news.domain.content.entity.Keyword;
 import com.example.news.domain.content.entity.YoutubeVideo;
 import com.example.news.domain.content.entity.YoutubeVideoKeyword;
 import com.example.news.domain.content.exception.YoutubeApiException;
+import java.util.Map;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 import com.example.news.domain.content.repository.KeywordRepository;
 import com.example.news.domain.content.repository.YoutubeTranscriptRepository;
 import com.example.news.domain.content.repository.YoutubeVideoKeywordRepository;
@@ -57,27 +60,34 @@ public class YoutubeSearchService {
 
     private static final int SHORTS_MAX_DURATION_SECONDS = 180; // YouTube Shorts 최대 3분
     private static final int FINAL_RESULT_SIZE = 20;
+    private static final int CACHE_MIN_SIZE = 20; // DB 캐시 사용 최소 영상 수
 
     @Transactional
     public List<YoutubeVideoDto.VideoCard> search(String keyword, String sort) {
-        // 1. YouTube에서 50개 후보 snippet 수집 (title+description 포함, 날짜순)
+        // 1. DB 캐시 확인 — 같은 키워드로 이미 수집된 영상이 충분하면 재사용
+        List<YoutubeVideoDto.VideoCard> cached = searchFromCache(keyword);
+        if (cached != null) {
+            log.info("keyword cache hit: keyword={}, size={}", keyword, cached.size());
+            return cached;
+        }
+
+        // 2. 캐시 미스 — YouTube에서 50개 후보 snippet 수집 (title+description 포함, 날짜순)
         List<VideoRankDto.VideoItem> snippets = searchSnippets(keyword);
         if (snippets.isEmpty()) {
             return List.of();
         }
 
-        // 2. Python 파이프라인: 코사인 유사도 기반 상위 30개 ID 반환 (숏폼 필터 버퍼)
+        // 3. Python 파이프라인: 코사인 유사도 기반 상위 30개 ID 반환 (숏폼 필터 버퍼)
         List<String> top30Ids = rankVideoIds(keyword, snippets);
         if (top30Ids.isEmpty()) {
             return List.of();
         }
 
-        // 3. 상위 30개 상세 조회 + DB 저장
+        // 4. 상위 30개 상세 조회 + DB 저장
         List<YoutubeVideo> videos = fetchAndSaveVideos(top30Ids);
 
-        // 4. 숏폼 제거 후 랭킹 순서 유지하며 최대 20개 반환
+        // 5. 숏폼 제거 후 랭킹 순서 유지하며 최대 20개 반환
         //    조건: 180초 이하 AND 제목/설명에 #Shorts 포함 → 제거
-        //    (2024년부터 YouTube Shorts 최대 3분. 뉴스 채널은 #Shorts 태그 거의 사용 안 함)
         List<YoutubeVideo> filtered = top30Ids.stream()
                 .map(videoId -> videos.stream()
                         .filter(v -> v.getYoutubeVideoId().equals(videoId))
@@ -99,6 +109,46 @@ public class YoutubeSearchService {
         return filtered.stream()
                 .map(YoutubeConverter::toVideoCard)
                 .collect(Collectors.toList());
+    }
+
+    // DB 캐시 조회 — 키워드로 연결된 영상이 CACHE_MIN_SIZE 이상이면 재랭킹 후 반환, 아니면 null
+    private List<YoutubeVideoDto.VideoCard> searchFromCache(String keyword) {
+        String normalized = keyword.trim().toLowerCase();
+        return keywordRepository.findByNormalizedKeyword(normalized)
+                .map(keywordEntity -> {
+                    List<YoutubeVideo> cachedVideos = youtubeVideoKeywordRepository
+                            .findByKeyword(keywordEntity)
+                            .stream()
+                            .map(YoutubeVideoKeyword::getYoutubeVideo)
+                            .collect(Collectors.toList());
+
+                    if (cachedVideos.size() < CACHE_MIN_SIZE) {
+                        return null; // 캐시 부족 → 신규 검색
+                    }
+
+                    // 캐시된 영상을 임베딩으로 재랭킹
+                    List<VideoRankDto.VideoItem> snippets = cachedVideos.stream()
+                            .map(v -> new VideoRankDto.VideoItem(
+                                    v.getYoutubeVideoId(),
+                                    v.getTitle() != null ? v.getTitle() : "",
+                                    v.getDescription() != null ? v.getDescription() : ""
+                            ))
+                            .collect(Collectors.toList());
+
+                    List<String> rankedIds = rankVideoIds(keyword, snippets);
+
+                    return rankedIds.stream()
+                            .map(videoId -> cachedVideos.stream()
+                                    .filter(v -> v.getYoutubeVideoId().equals(videoId))
+                                    .findFirst()
+                                    .orElse(null))
+                            .filter(Objects::nonNull)
+                            .filter(v -> !isShorts(v))
+                            .limit(FINAL_RESULT_SIZE)
+                            .map(YoutubeConverter::toVideoCard)
+                            .collect(Collectors.toList());
+                })
+                .orElse(null);
     }
 
     // YouTube search.list 호출 — snippet(title+description) 포함하여 50개 반환
