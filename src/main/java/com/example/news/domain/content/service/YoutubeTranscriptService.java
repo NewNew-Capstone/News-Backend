@@ -73,7 +73,7 @@ public class YoutubeTranscriptService {
         }
 
         // DB 캐시 확인
-        Optional<YoutubeTranscript> existing = youtubeTranscriptRepository.findByYoutubeVideo(video);
+        Optional<YoutubeTranscript> existing = youtubeTranscriptRepository.findTopByYoutubeVideoOrderByCreatedAtDesc(video);
         if (existing.isPresent()) {
             log.info("[Transcript] DB 캐시 히트 - videoId={}, transcriptId={}", youtubeVideoId, existing.get().getId());
             return YoutubeConverter.toTranscriptDto(existing.get());
@@ -110,7 +110,7 @@ public class YoutubeTranscriptService {
             return null;
         }
 
-        Optional<YoutubeTranscript> existing = youtubeTranscriptRepository.findByYoutubeVideo(video);
+        Optional<YoutubeTranscript> existing = youtubeTranscriptRepository.findTopByYoutubeVideoOrderByCreatedAtDesc(video);
         if (existing.isPresent()) {
             log.info("[TranscriptEntity] DB 캐시 히트 - videoId={}, transcriptId={}", youtubeVideoId, existing.get().getId());
             return existing.get();
@@ -137,7 +137,7 @@ public class YoutubeTranscriptService {
         ReentrantLock lock = videoLocks.computeIfAbsent(youtubeVideoId, key -> new ReentrantLock());
         lock.lock();
         try {
-            Optional<YoutubeTranscript> existing = youtubeTranscriptRepository.findByYoutubeVideo(video);
+            Optional<YoutubeTranscript> existing = youtubeTranscriptRepository.findTopByYoutubeVideoOrderByCreatedAtDesc(video);
             if (existing.isPresent()) return existing.get();
 
             boolean hitRateLimit = false;

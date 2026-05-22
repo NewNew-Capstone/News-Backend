@@ -2,6 +2,10 @@ package com.example.news.domain.analysis.service;
 
 import com.example.news.domain.analysis.dto.AnalyzeRawTextRequestDto;
 import com.example.news.domain.analysis.dto.BiasAnalysisResultResponse;
+import com.example.news.domain.analysis.dto.ScoreReasonRequestDto;
+import com.example.news.domain.analysis.dto.ScoreReasonResponseDto;
+import com.example.news.domain.analysis.dto.SummaryRequestDto;
+import com.example.news.domain.analysis.dto.SummaryResponseDto;
 import com.example.news.domain.analysis.entity.AnalysisJob;
 import com.example.news.domain.content.entity.YoutubeTranscript;
 import com.example.news.domain.content.entity.YoutubeVideo;
@@ -71,10 +75,73 @@ public class AnalysisService {
         Optional<BiasAnalysisResult> existing = biasAnalysisResultRepository
                 .findTopByTargetIdAndTargetTypeOrderByCreatedAtDesc(videoId, TargetType.YOUTUBE_VIDEO);
         if (existing.isPresent() && existing.get().getAnalysisJob() != null) {
-            log.info("분석 결과 캐시 히트 - videoId={}, jobId={}", videoId, existing.get().getAnalysisJob().getId());
-            return existing.get().getAnalysisJob();
+            BiasAnalysisResult existingResult = existing.get();
+            log.info("분석 결과 캐시 히트 - videoId={}, jobId={}", videoId, existingResult.getAnalysisJob().getId());
+            enrichSummaryText(existingResult, transcript);
+            enrichScoreReasonSummary(existingResult, transcript);
+            return existingResult.getAnalysisJob();
         }
         return createAnalysisJobFromRawText(transcript, true);
+    }
+
+    public void enrichSummaryText(BiasAnalysisResult result, YoutubeTranscript transcript) {
+        try {
+            SummaryRequestDto request = new SummaryRequestDto(
+                    result.getTargetId(),
+                    transcript.getYoutubeVideo().getTitle(),
+                    transcript.getLanguageCode(),
+                    transcript.getTranscriptText());
+
+            SummaryResponseDto response = webClient.post()
+                    .uri(pythonBaseUrl + "/analyze/summary")
+                    .bodyValue(request)
+                    .retrieve()
+                    .bodyToMono(SummaryResponseDto.class)
+                    .block();
+
+            if (response != null && hasText(response.summaryText())) {
+                result.updateSummaryText(response.summaryText());
+                log.info("영상 요약 보강 완료 - resultId={}, videoId={}", result.getId(), result.getTargetId());
+            }
+        } catch (Exception e) {
+            log.warn("영상 요약 보강 실패 - resultId={}, videoId={}", result.getId(), result.getTargetId(), e);
+        }
+    }
+
+    public void enrichScoreReasonSummary(BiasAnalysisResult result, String language) {
+        try {
+            ScoreReasonRequestDto request = new ScoreReasonRequestDto(
+                    result.getTargetId(),
+                    language,
+                    result.getOverallBiasScore(),
+                    result.getOpinionScore(),
+                    result.getEmotionScore(),
+                    result.getFactRatio(),
+                    result.getHeadlineBodyGapScore(),
+                    result.getScoreEvidence());
+
+            ScoreReasonResponseDto response = webClient.post()
+                    .uri(pythonBaseUrl + "/analyze/score-reason")
+                    .bodyValue(request)
+                    .retrieve()
+                    .bodyToMono(ScoreReasonResponseDto.class)
+                    .block();
+
+            if (response != null && hasText(response.scoreReasonSummary())) {
+                result.updateScoreReasonSummary(response.scoreReasonSummary());
+                log.info("점수 근거 요약 보강 완료 - resultId={}, videoId={}", result.getId(), result.getTargetId());
+            }
+        } catch (Exception e) {
+            log.warn("점수 근거 요약 보강 실패 - resultId={}, videoId={}", result.getId(), result.getTargetId(), e);
+        }
+    }
+
+    private void enrichScoreReasonSummary(BiasAnalysisResult result, YoutubeTranscript transcript) {
+        enrichScoreReasonSummary(result, transcript.getLanguageCode());
+    }
+
+    private boolean hasText(String value) {
+        return value != null && !value.trim().isEmpty();
     }
 
     @Transactional
