@@ -1,6 +1,7 @@
 package com.example.news.domain.content.service;
 
 import com.example.news.domain.content.converter.YoutubeConverter;
+import com.example.news.domain.content.dto.VideoRankDto;
 import com.example.news.domain.content.dto.YoutubeVideoDto;
 import com.example.news.domain.content.entity.Keyword;
 import com.example.news.domain.content.entity.YoutubeVideo;
@@ -20,6 +21,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.client.RestTemplate;
 
 import java.io.IOException;
 import java.time.LocalDate;
@@ -44,44 +46,71 @@ public class YoutubeSearchService {
     private final TitleTranslationService titleTranslationService;
     private final VideoGraphSyncService videoGraphSyncService;
     private final ApplicationEventPublisher eventPublisher;
+    private final RestTemplate restTemplate;
 
     @Value("${youtube.api.key}")
     private String apiKey;
     @Value("${issue.search.auto-cluster-enabled:false}")
     private boolean issueSearchAutoClusterEnabled;
+    @Value("${ai-pipeline.base-url}")
+    private String aiPipelineBaseUrl;
+
+    private static final int SHORTS_MAX_DURATION_SECONDS = 180; // YouTube Shorts 최대 3분
+    private static final int FINAL_RESULT_SIZE = 20;
 
     @Transactional
     public List<YoutubeVideoDto.VideoCard> search(String keyword, String sort) {
-        List<String> videoIds = searchVideoIds(keyword, sort);
-        if (videoIds.isEmpty()) {
+        // 1. YouTube에서 50개 후보 snippet 수집 (title+description 포함, 날짜순)
+        List<VideoRankDto.VideoItem> snippets = searchSnippets(keyword);
+        if (snippets.isEmpty()) {
             return List.of();
         }
 
-        List<YoutubeVideo> videos = fetchAndSaveVideos(videoIds);
-        translateTitlesIfNeeded(videos);
-        linkKeywordToVideos(keyword, videos);
+        // 2. Python 파이프라인: 코사인 유사도 기반 상위 30개 ID 반환 (숏폼 필터 버퍼)
+        List<String> top30Ids = rankVideoIds(keyword, snippets);
+        if (top30Ids.isEmpty()) {
+            return List.of();
+        }
+
+        // 3. 상위 30개 상세 조회 + DB 저장
+        List<YoutubeVideo> videos = fetchAndSaveVideos(top30Ids);
+
+        // 4. 숏폼 제거 후 랭킹 순서 유지하며 최대 20개 반환
+        //    조건: 180초 이하 AND 제목/설명에 #Shorts 포함 → 제거
+        //    (2024년부터 YouTube Shorts 최대 3분. 뉴스 채널은 #Shorts 태그 거의 사용 안 함)
+        List<YoutubeVideo> filtered = top30Ids.stream()
+                .map(videoId -> videos.stream()
+                        .filter(v -> v.getYoutubeVideoId().equals(videoId))
+                        .findFirst()
+                        .orElse(null))
+                .filter(Objects::nonNull)
+                .filter(v -> !isShorts(v))
+                .limit(FINAL_RESULT_SIZE)
+                .collect(Collectors.toList());
+
+        translateTitlesIfNeeded(filtered);
+        linkKeywordToVideos(keyword, filtered);
 
         if (issueSearchAutoClusterEnabled) {
-            List<Long> videoDbIds = videos.stream().map(YoutubeVideo::getId).toList();
+            List<Long> videoDbIds = filtered.stream().map(YoutubeVideo::getId).toList();
             eventPublisher.publishEvent(new VideoSearchedEvent(keyword, videoDbIds));
         }
 
-        return videos.stream()
+        return filtered.stream()
                 .map(YoutubeConverter::toVideoCard)
                 .collect(Collectors.toList());
     }
 
-    // 유튜브 검색 api 호출
-    private List<String> searchVideoIds(String keyword, String sort) {
+    // YouTube search.list 호출 — snippet(title+description) 포함하여 50개 반환
+    private List<VideoRankDto.VideoItem> searchSnippets(String keyword) {
         try {
             YouTube.Search.List searchRequest = youtubeClient.search().list(List.of("snippet"));
             searchRequest.setKey(apiKey);
             searchRequest.setQ(keyword);
             searchRequest.setType(List.of("video"));
-            searchRequest.setMaxResults(20L);
-            searchRequest.setOrder(resolveOrder(sort));
+            searchRequest.setMaxResults(50L);
+            searchRequest.setOrder("date"); // YouTube 알고리즘 개입 제거, 중립적 후보 수집
 
-            // EU 같은 비한국어 키워드 검색 품질 저하를 막기 위해 2글자 초과일 때만 한국어 선호를 건다.
             String trimmedKeyword = keyword == null ? "" : keyword.trim();
             if (trimmedKeyword.length() > 2) {
                 searchRequest.setRelevanceLanguage("ko");
@@ -89,22 +118,43 @@ public class YoutubeSearchService {
 
             SearchListResponse response = searchRequest.execute();
             return response.getItems().stream()
-                    .map(item -> item.getId().getVideoId())
-                    .filter(Objects::nonNull)
+                    .filter(item -> item.getId().getVideoId() != null)
+                    .map(item -> new VideoRankDto.VideoItem(
+                            item.getId().getVideoId(),
+                            item.getSnippet().getTitle() != null ? item.getSnippet().getTitle() : "",
+                            item.getSnippet().getDescription() != null ? item.getSnippet().getDescription() : ""
+                    ))
                     .collect(Collectors.toList());
         } catch (IOException e) {
             throw new YoutubeApiException(e.getMessage(), e);
         }
     }
 
-    private String resolveOrder(String sort) {
-        if (sort == null || sort.isBlank()) {
-            return "relevance";
+    // Python 파이프라인 호출 — 코사인 유사도 기반 상위 30개 video ID 반환 (숏폼 필터 후 20개 확보 버퍼)
+    private List<String> rankVideoIds(String keyword, List<VideoRankDto.VideoItem> snippets) {
+        try {
+            VideoRankDto.Request request = new VideoRankDto.Request(keyword, snippets, 30);
+            VideoRankDto.Response response = restTemplate.postForObject(
+                    aiPipelineBaseUrl + "/content/rank-videos",
+                    request,
+                    VideoRankDto.Response.class
+            );
+            if (response == null || response.rankedVideoIds() == null) {
+                log.warn("video ranking returned empty response for keyword={}", keyword);
+                return snippets.stream()
+                        .map(VideoRankDto.VideoItem::videoId)
+                        .limit(30)
+                        .collect(Collectors.toList());
+            }
+            return response.rankedVideoIds();
+        } catch (Exception e) {
+            // 랭킹 실패 시 상위 30개를 그대로 반환 (서비스 중단 방지)
+            log.warn("video ranking failed for keyword={}, fallback to first 30. reason={}", keyword, e.getMessage());
+            return snippets.stream()
+                    .map(VideoRankDto.VideoItem::videoId)
+                    .limit(30)
+                    .collect(Collectors.toList());
         }
-        return switch (sort.trim().toLowerCase()) {
-            case "date", "recent", "latest" -> "date";
-            default -> "relevance";
-        };
     }
 
     // 국가별 비교용 검색 (번역된 키워드 + 지역/언어 + 날짜 범위)
@@ -271,6 +321,17 @@ public class YoutubeSearchService {
                 .orElseGet(() -> youtubeVideoRepository.save(YoutubeConverter.toYoutubeVideoEntity(video)));
         videoGraphSyncService.syncVideoNow(saved);
         return saved;
+    }
+
+    // YouTube Shorts 판별 — 180초 이하이면서 #Shorts 태그 포함된 경우
+    private boolean isShorts(YoutubeVideo video) {
+        if (video.getDurationSeconds() == null
+                || video.getDurationSeconds() > SHORTS_MAX_DURATION_SECONDS) {
+            return false;
+        }
+        String title = video.getTitle() != null ? video.getTitle().toLowerCase() : "";
+        String description = video.getDescription() != null ? video.getDescription().toLowerCase() : "";
+        return title.contains("#shorts") || description.contains("#shorts");
     }
 
     // 영상-키워드 연결 중복 없이 저장
