@@ -27,8 +27,13 @@ public record AnalysisResultResponse(
         List<KeywordItem> emotionKeywords,
         List<SentenceLabelItem> sentenceLabels,
         List<EvidenceItem> evidences,
+        List<FocusKeywordDto> focusKeywords,
         List<HighlightSpanItem> highlightSpans
 ) {
+    public AnalysisResultResponse {
+        focusKeywords = focusKeywords == null ? List.of() : focusKeywords;
+    }
+
     @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
     public record KeywordItem(
             String keywordText,

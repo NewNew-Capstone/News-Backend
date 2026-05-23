@@ -7,6 +7,7 @@ import com.example.news.domain.analysis.entity.HighlightResult;
 import com.example.news.domain.analysis.enums.TargetType;
 import com.example.news.domain.analysis.exception.AnalysisException;
 import com.example.news.domain.analysis.exception.code.AnalysisErrorCode;
+import com.example.news.domain.analysis.repository.BiasAnalysisFocusKeywordRepository;
 import com.example.news.domain.analysis.repository.BiasAnalysisKeywordRepository;
 import com.example.news.domain.analysis.repository.BiasAnalysisResultRepository;
 import com.example.news.domain.analysis.repository.BiasEvidenceRepository;
@@ -26,6 +27,7 @@ public class BiasAnalysisResultService {
 
     private final BiasAnalysisResultRepository biasAnalysisResultRepository;
     private final BiasAnalysisKeywordRepository biasAnalysisKeywordRepository;
+    private final BiasAnalysisFocusKeywordRepository biasAnalysisFocusKeywordRepository;
     private final BiasEvidenceRepository biasEvidenceRepository;
     private final SentenceBiasLabelRepository sentenceBiasLabelRepository;
     private final HighlightResultRepository highlightResultRepository;
@@ -40,6 +42,11 @@ public class BiasAnalysisResultService {
         var keywords = biasAnalysisKeywordRepository.findAllByBiasAnalysisResultId(result.getId())
                 .stream()
                 .map(AnalysisResultConverter::toKeywordItem)
+                .toList();
+
+        var focusKeywords = biasAnalysisFocusKeywordRepository.findAllByBiasAnalysisResultId(result.getId())
+                .stream()
+                .map(AnalysisResultConverter::toFocusKeywordItem)
                 .toList();
 
         var evidences = biasEvidenceRepository.findAllByBiasAnalysisResultId(result.getId())
@@ -65,6 +72,6 @@ public class BiasAnalysisResultService {
                 .map(AnalysisResultConverter::toHighlightSpanItem)
                 .toList();
 
-        return AnalysisResultConverter.toResponse(result, keywords, sentenceLabels, evidences, highlightSpans);
+        return AnalysisResultConverter.toResponse(result, keywords, focusKeywords, sentenceLabels, evidences, highlightSpans);
     }
 }
