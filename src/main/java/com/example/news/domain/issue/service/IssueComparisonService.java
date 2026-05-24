@@ -139,6 +139,17 @@ public class IssueComparisonService {
         }
 
         for (IssueCluster cluster : targetClusters) {
+            // 반대 영상 도출에 최소 2개 필요 — 미달이면 다음 이벤트에서 재시도
+            List<IssueClusterItem> allItems = issueClusterItemRepository.findByIssueClusterId(cluster.getId());
+            List<Long> allVideoIds = allItems.stream().map(IssueClusterItem::getYoutubeVideoId).distinct().toList();
+            long analyzedCount = biasAnalysisResultRepository
+                    .findByTargetTypeAndTargetIdIn(TargetType.YOUTUBE_VIDEO, allVideoIds).size();
+            if (analyzedCount < 2) {
+                log.info("clustering deferred: only {}/{} analyzed (clusterId={})",
+                        analyzedCount, allVideoIds.size(), cluster.getId());
+                continue;
+            }
+
             // 동시 이벤트가 같은 클러스터를 중복 처리하지 않도록 선점한다.
             int claimed = issueClusterRepository.updateStatusIfCurrent(
                     cluster.getId(), ClusterStatus.PENDING, ClusterStatus.PROCESSING
@@ -586,8 +597,13 @@ public class IssueComparisonService {
             return;
         }
 
-        // 기존 IssueClusterItem 교체 (벌크 삭제 + flush로 중복키 충돌 방지)
-        issueClusterItemRepository.deleteByIssueClusterId(originalCluster.getId());
+        // 분석된 영상의 기존 아이템만 삭제 — 미분석 영상은 클러스터에 유지해 반대 영상 탐색에 활용
+        Set<Long> analyzedVideoIds = groups.stream()
+                .flatMap(g -> g.members.stream())
+                .map(sc -> sc.candidate().getVideoId())
+                .collect(Collectors.toSet());
+        issueClusterItemRepository.deleteByIssueClusterIdAndYoutubeVideoIdIn(
+                originalCluster.getId(), analyzedVideoIds);
         issueClusterItemRepository.flush();
 
         for (int gi = 0; gi < groups.size(); gi++) {

@@ -11,7 +11,6 @@ import java.util.Map;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 import com.example.news.domain.content.repository.KeywordRepository;
-import com.example.news.domain.content.repository.YoutubeTranscriptRepository;
 import com.example.news.domain.content.repository.YoutubeVideoKeywordRepository;
 import com.example.news.domain.content.repository.YoutubeVideoRepository;
 import com.example.news.domain.graph.service.VideoGraphSyncService;
@@ -43,7 +42,6 @@ public class YoutubeSearchService {
     // 키워드 검색 핵심 서비스
     private final YouTube youtubeClient;
     private final YoutubeVideoRepository youtubeVideoRepository;
-    private final YoutubeTranscriptRepository youtubeTranscriptRepository;
     private final KeywordRepository keywordRepository;
     private final YoutubeVideoKeywordRepository youtubeVideoKeywordRepository;
     private final TitleTranslationService titleTranslationService;
@@ -319,15 +317,11 @@ public class YoutubeSearchService {
     private List<YoutubeVideo> fetchAndSaveVideos(List<String> videoIds) {
         List<YoutubeVideo> result = new ArrayList<>();
 
-        // DB에 이미 있는 영상은 재호출 없이 반환 (자막 있는 것만)
+        // DB에 이미 있는 영상은 재호출 없이 반환 (자막 유무와 무관하게 포함 — 분석 파이프라인이 자막 수집 담당)
         List<String> missingIds = new ArrayList<>();
         for (String videoId : videoIds) {
             youtubeVideoRepository.findByYoutubeVideoId(videoId).ifPresentOrElse(
-                    video -> {
-                        if (youtubeTranscriptRepository.existsByYoutubeVideoId(video.getId())) {
-                            result.add(video);
-                        }
-                    },
+                    result::add,
                     () -> missingIds.add(videoId)
             );
         }
