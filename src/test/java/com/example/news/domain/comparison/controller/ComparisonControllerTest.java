@@ -1,6 +1,7 @@
 package com.example.news.domain.comparison.controller;
 
 import com.example.news.domain.comparison.dto.ComparisonVideoTargetResponse;
+import com.example.news.domain.comparison.dto.click.ClickVideoCompareResponse;
 import com.example.news.domain.comparison.dto.collect.CollectMultilingualRequest;
 import com.example.news.domain.comparison.dto.collect.CollectMultilingualResponse;
 import com.example.news.domain.comparison.exception.ComparisonException;
@@ -31,7 +32,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 @WebMvcTest(
-        controllers = ComparisonController.class,
+        controllers = {ComparisonController.class, ClickedVideoComparisonController.class},
         excludeAutoConfiguration = {SecurityAutoConfiguration.class, SecurityFilterAutoConfiguration.class},
         excludeFilters = @ComponentScan.Filter(
                 type = FilterType.ASSIGNABLE_TYPE,
@@ -176,5 +177,95 @@ class ComparisonControllerTest {
                                 """))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.status.statusCode").value("C007"));
+    }
+
+    @Test
+    void compareOnClick_returnsReadyGraph() throws Exception {
+        ClickVideoCompareResponse response = new ClickVideoCompareResponse(
+                "rt-1",
+                "q0Jo5F8pHbs",
+                ClickVideoCompareResponse.Status.READY,
+                new ClickVideoCompareResponse.Graph(
+                        objectMapper.readTree("[{\"id\":\"us1\"}]"),
+                        objectMapper.readTree("[]"),
+                        objectMapper.readTree("[{\"country_code\":\"US\"}]")
+                )
+        );
+        when(comparisonProxyService.compareOnClick(any())).thenReturn(response);
+
+        mockMvc.perform(post("/api/videos/compare-on-click")
+                        .contentType("application/json")
+                        .content("""
+                                {
+                                  "keyword":"트럼프 대만",
+                                  "video":{
+                                    "videoId":"q0Jo5F8pHbs",
+                                    "title":"[지식뉴스] 시진핑의 대만 야욕",
+                                    "description":"트럼프 대만 중국 관련 뉴스",
+                                    "countryCode":"KR",
+                                    "language":"ko",
+                                    "channelId":"sbs-channel",
+                                    "channelName":"교양이를 부탁해",
+                                    "publishedAt":"2026-05-21T13:39:03Z",
+                                    "thumbnailUrl":"https://i.ytimg.com/vi/q0Jo5F8pHbs/hqdefault.jpg",
+                                    "viewCount":45121
+                                  }
+                                }
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.body.requestId").value("rt-1"))
+                .andExpect(jsonPath("$.body.selectedVideoId").value("q0Jo5F8pHbs"))
+                .andExpect(jsonPath("$.body.status").value("READY"))
+                .andExpect(jsonPath("$.body.graph.nodes[0].id").value("us1"))
+                .andExpect(jsonPath("$.body.graph.countryPerspectives[0].country_code").value("US"));
+
+        verify(comparisonProxyService).compareOnClick(any());
+    }
+
+    @Test
+    void compareOnClick_returns400_whenRequestInvalid() throws Exception {
+        mockMvc.perform(post("/api/videos/compare-on-click")
+                        .contentType("application/json")
+                        .content("""
+                                {"keyword":" ","video":{"videoId":"q0Jo5F8pHbs"}}
+                                """))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.status.statusCode").value("C007"));
+    }
+
+    @Test
+    void compareOnClick_returns502_whenPythonCallFails() throws Exception {
+        when(comparisonProxyService.compareOnClick(any()))
+                .thenThrow(new ComparisonException(
+                        ComparisonErrorCode.COMPARISON_API_FAILED,
+                        "Python clicked-video API 호출 실패: 503 SERVICE_UNAVAILABLE"
+                ));
+
+        mockMvc.perform(post("/api/videos/compare-on-click")
+                        .contentType("application/json")
+                        .content("""
+                                {
+                                  "keyword":"트럼프 대만",
+                                  "video":{"videoId":"q0Jo5F8pHbs"}
+                                }
+                                """))
+                .andExpect(status().isBadGateway())
+                .andExpect(jsonPath("$.status.statusCode").value("CP002"))
+                .andExpect(jsonPath("$.status.description").value("Python clicked-video API 호출 실패: 503 SERVICE_UNAVAILABLE"));
+    }
+
+    @Test
+    void getCompareJob_returnsPythonPayload() throws Exception {
+        JsonNode payload = objectMapper.readTree("""
+                {"request_id":"rt-1","status":"running"}
+                """);
+        when(comparisonProxyService.getCompareJob("rt-1")).thenReturn(payload);
+
+        mockMvc.perform(get("/api/videos/compare-jobs/rt-1"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.body.request_id").value("rt-1"))
+                .andExpect(jsonPath("$.body.status").value("running"));
+
+        verify(comparisonProxyService).getCompareJob("rt-1");
     }
 }
