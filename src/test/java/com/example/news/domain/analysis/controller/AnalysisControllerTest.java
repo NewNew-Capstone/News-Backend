@@ -1,5 +1,7 @@
 package com.example.news.domain.analysis.controller;
 
+import com.example.news.domain.analysis.dto.BiasAnalysisResultResponse;
+import com.example.news.domain.analysis.dto.FocusKeywordDto;
 import com.example.news.domain.analysis.entity.AnalysisJob;
 import com.example.news.domain.analysis.enums.JobStatus;
 import com.example.news.domain.analysis.enums.JobType;
@@ -21,6 +23,9 @@ import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.context.annotation.ComponentScan;
 import org.springframework.context.annotation.FilterType;
 import org.springframework.test.web.servlet.MockMvc;
+
+import java.util.List;
+import java.util.Map;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.when;
@@ -60,18 +65,26 @@ class AnalysisControllerTest {
         // given
         YoutubeTranscript transcript = transcript();
         AnalysisJob job = AnalysisJob.builder()
+                .id(100L)
                 .targetId(10L)
                 .targetType(TargetType.YOUTUBE_VIDEO)
                 .jobType(JobType.VIDEO_BIAS_ANALYSIS)
                 .status(JobStatus.SUCCESS)
                 .build();
         when(youtubeTranscriptService.getOrFetchTranscriptEntity("abc123", true)).thenReturn(transcript);
-        when(analysisService.getOrCreateAnalysisJob(any(YoutubeTranscript.class))).thenReturn(job);
+        when(analysisService.getOrCreateAnalysisExecutionResult(any(YoutubeTranscript.class)))
+                .thenReturn(new AnalysisService.AnalysisExecutionResult(job, pythonResponse()));
 
         // when & then
         mockMvc.perform(post("/api/v1/analysis/analyze/abc123"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.body.status").value("SUCCESS"));
+                .andExpect(jsonPath("$.body.status").value("SUCCESS"))
+                .andExpect(jsonPath("$.body.job_id").value(100L))
+                .andExpect(jsonPath("$.body.target_id").value(10L))
+                .andExpect(jsonPath("$.body.overall_bias_score").value(0.5))
+                .andExpect(jsonPath("$.body.focus_keywords[0].keyword_text").value("장경태"))
+                .andExpect(jsonPath("$.body.focus_keywords[0].occurrence_count").value(14))
+                .andExpect(jsonPath("$.body.focus_keywords[0].sentence_count").value(11));
     }
 
     @Test
@@ -85,7 +98,8 @@ class AnalysisControllerTest {
                 .status(JobStatus.FAILED)
                 .build();
         when(youtubeTranscriptService.getOrFetchTranscriptEntity("abc123", true)).thenReturn(transcript);
-        when(analysisService.getOrCreateAnalysisJob(any(YoutubeTranscript.class))).thenReturn(job);
+        when(analysisService.getOrCreateAnalysisExecutionResult(any(YoutubeTranscript.class)))
+                .thenReturn(new AnalysisService.AnalysisExecutionResult(job, null));
 
         mockMvc.perform(post("/api/v1/analysis/analyze/abc123"))
                 .andExpect(status().isOk())
@@ -105,5 +119,32 @@ class AnalysisControllerTest {
                 .languageCode("ko")
                 .transcriptText("테스트 자막")
                 .build();
+    }
+
+    private BiasAnalysisResultResponse pythonResponse() {
+        return new BiasAnalysisResultResponse(
+                10L,
+                "YOUTUBE_VIDEO",
+                1L,
+                0.5,
+                0.4,
+                0.3,
+                0.2,
+                null,
+                null,
+                null,
+                null,
+                "reason",
+                "summary",
+                0.7,
+                "evidence",
+                Map.of("OPINION", 0.4),
+                List.of(),
+                List.of(),
+                List.of(),
+                List.of(),
+                List.of(),
+                List.of(new FocusKeywordDto("장경태", 0.82, 14, 11))
+        );
     }
 }

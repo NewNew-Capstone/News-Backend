@@ -11,6 +11,7 @@ import com.example.news.domain.content.entity.YoutubeTranscript;
 import com.example.news.domain.content.entity.YoutubeVideo;
 import com.example.news.domain.content.repository.YoutubeVideoRepository;
 import com.example.news.domain.content.service.YoutubeTranscriptService;
+import com.example.news.domain.analysis.entity.BiasAnalysisFocusKeyword;
 import com.example.news.domain.analysis.entity.BiasAnalysisKeyword;
 import com.example.news.domain.analysis.entity.BiasAnalysisResult;
 import com.example.news.domain.analysis.entity.BiasEvidence;
@@ -25,6 +26,7 @@ import com.example.news.domain.analysis.enums.SentenceLabelType;
 import com.example.news.domain.analysis.enums.SentenceTargetType;
 import com.example.news.domain.analysis.enums.TargetType;
 import com.example.news.domain.analysis.repository.AnalysisJobRepository;
+import com.example.news.domain.analysis.repository.BiasAnalysisFocusKeywordRepository;
 import com.example.news.domain.analysis.repository.BiasAnalysisKeywordRepository;
 import com.example.news.domain.analysis.repository.BiasAnalysisResultRepository;
 import com.example.news.domain.analysis.repository.BiasEvidenceRepository;
@@ -56,6 +58,7 @@ public class AnalysisService {
     private final AnalysisJobRepository analysisJobRepository;
     private final ContentSentenceRepository contentSentenceRepository;
     private final BiasAnalysisResultRepository biasAnalysisResultRepository;
+    private final BiasAnalysisFocusKeywordRepository biasAnalysisFocusKeywordRepository;
     private final BiasAnalysisKeywordRepository biasAnalysisKeywordRepository;
     private final SentenceBiasLabelRepository sentenceBiasLabelRepository;
     private final BiasEvidenceRepository biasEvidenceRepository;
@@ -69,8 +72,13 @@ public class AnalysisService {
     @Value("${python.base-url}")
     private String pythonBaseUrl;
 
+    public record AnalysisExecutionResult(
+            AnalysisJob job,
+            BiasAnalysisResultResponse analysisResult
+    ) {}
+
     @Transactional
-    public AnalysisJob getOrCreateAnalysisJob(YoutubeTranscript transcript) {
+    public AnalysisExecutionResult getOrCreateAnalysisExecutionResult(YoutubeTranscript transcript) {
         Long videoId = transcript.getYoutubeVideo().getId();
         Optional<BiasAnalysisResult> existing = biasAnalysisResultRepository
                 .findTopByTargetIdAndTargetTypeOrderByCreatedAtDesc(videoId, TargetType.YOUTUBE_VIDEO);
@@ -79,9 +87,14 @@ public class AnalysisService {
             log.info("분석 결과 캐시 히트 - videoId={}, jobId={}", videoId, existingResult.getAnalysisJob().getId());
             enrichSummaryText(existingResult, transcript);
             enrichScoreReasonSummary(existingResult, transcript);
-            return existingResult.getAnalysisJob();
+            return new AnalysisExecutionResult(existingResult.getAnalysisJob(), null);
         }
-        return createAnalysisJobFromRawText(transcript, true);
+        return createAnalysisExecutionFromRawText(transcript, true);
+    }
+
+    @Transactional
+    public AnalysisJob getOrCreateAnalysisJob(YoutubeTranscript transcript) {
+        return getOrCreateAnalysisExecutionResult(transcript).job();
     }
 
     public void enrichSummaryText(BiasAnalysisResult result, YoutubeTranscript transcript) {
@@ -146,11 +159,16 @@ public class AnalysisService {
 
     @Transactional
     public AnalysisJob createAnalysisJobFromRawText(YoutubeTranscript transcript) {
-        return createAnalysisJobFromRawText(transcript, false);
+        return createAnalysisExecutionFromRawText(transcript, false).job();
     }
 
     @Transactional
     public AnalysisJob createAnalysisJobFromRawText(YoutubeTranscript transcript, boolean priority) {
+        return createAnalysisExecutionFromRawText(transcript, priority).job();
+    }
+
+    @Transactional
+    public AnalysisExecutionResult createAnalysisExecutionFromRawText(YoutubeTranscript transcript, boolean priority) {
 
         Long transcriptId = transcript.getId();
         Long youtubeVideoId = transcript.getYoutubeVideo().getId();
@@ -165,6 +183,7 @@ public class AnalysisService {
         final AnalysisJob savedJob = analysisJobRepository.save(job);
 
         AnalysisCompletedEvent completedEvent = null;
+        BiasAnalysisResultResponse result = null;
 
         try {
             // 1. RUNNING 전이
@@ -181,12 +200,17 @@ public class AnalysisService {
                     transcript.getYoutubeVideo().getCountryCode(),
                     priority);
 
-            BiasAnalysisResultResponse result = webClient.post()
+            result = webClient.post()
                     .uri(pythonBaseUrl + "/analyze/raw")
                     .bodyValue(request)
                     .retrieve()
                     .bodyToMono(BiasAnalysisResultResponse.class)
                     .block();
+            log.info("python focusKeywords size={}",
+                    result == null ? null : result.focusKeywords().size());
+            if (result == null) {
+                throw new IllegalStateException("Python analysis response is null");
+            }
 
             // 3. ContentSentence 저장 + pythonId(sentenceOrder) → DB ID 매핑 생성
             Map<Long, Long> pythonIdToDbId = new HashMap<>();
@@ -238,6 +262,21 @@ public class AnalysisService {
                                         .keywordText(k.keywordText())
                                         .keywordType(BiasKeywordType.valueOf(k.keywordType().toUpperCase()))
                                         .score(k.score())
+                                        .build())
+                                .toList()
+                );
+            }
+
+            if (result.focusKeywords() != null && !result.focusKeywords().isEmpty()) {
+                biasAnalysisFocusKeywordRepository.saveAll(
+                        result.focusKeywords().stream()
+                                .filter(k -> hasText(k.keywordText()))
+                                .map(k -> BiasAnalysisFocusKeyword.builder()
+                                        .biasAnalysisResult(savedResult)
+                                        .keywordText(k.keywordText())
+                                        .score(k.score())
+                                        .occurrenceCount(k.occurrenceCount())
+                                        .sentenceCount(k.sentenceCount())
                                         .build())
                                 .toList()
                 );
@@ -325,7 +364,10 @@ public class AnalysisService {
             }
         }
 
-        return savedJob;
+        return new AnalysisExecutionResult(
+                savedJob,
+                savedJob.getStatus() == JobStatus.SUCCESS ? result : null
+        );
     }
 
     @Async
