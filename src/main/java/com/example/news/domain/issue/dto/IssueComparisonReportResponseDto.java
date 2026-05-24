@@ -24,7 +24,10 @@ public class IssueComparisonReportResponseDto {
         private long totalViewCount;
         private double avgViewCount;
         private double avgOverallBiasScore;
+        private double avgOpinionScore;
+        private double avgFactRatio;
         private Map<String, Integer> toneDistribution;
         private double channelTop1Share;
+        private List<String> topKeywords;
     }
 }
