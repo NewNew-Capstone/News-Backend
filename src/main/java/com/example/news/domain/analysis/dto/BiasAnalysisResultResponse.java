@@ -30,7 +30,19 @@ public record BiasAnalysisResultResponse(
         Map<String, Double> biasTypeScores,
 
         @Nullable List<KeywordResultDto> keywords,
+        @Nullable List<KeywordResultDto> emotionKeywords,
         @Nullable List<SentenceLabelResultDto> sentenceLabels,
         @Nullable List<EvidenceResultDto> evidences,
-        @Nullable List<SentenceResultResponse> sentences
-) {}
+        @Nullable List<SentenceResultResponse> sentences,
+        List<FocusKeywordDto> focusKeywords
+) {
+    public BiasAnalysisResultResponse {
+        keywords = keywords == null ? List.of() : keywords;
+        emotionKeywords = emotionKeywords == null
+                ? keywords.stream()
+                        .filter(k -> k.keywordType() != null && k.keywordType().equalsIgnoreCase("EMOTION"))
+                        .toList()
+                : emotionKeywords;
+        focusKeywords = focusKeywords == null ? List.of() : focusKeywords;
+    }
+}
