@@ -65,8 +65,8 @@ class AnalysisControllerTest {
                 .jobType(JobType.VIDEO_BIAS_ANALYSIS)
                 .status(JobStatus.SUCCESS)
                 .build();
-        when(youtubeTranscriptService.getOrFetchTranscriptEntity("abc123")).thenReturn(transcript);
-        when(analysisService.createAnalysisJobFromRawText(any(YoutubeTranscript.class))).thenReturn(job);
+        when(youtubeTranscriptService.getOrFetchTranscriptEntity("abc123", true)).thenReturn(transcript);
+        when(analysisService.getOrCreateAnalysisJob(any(YoutubeTranscript.class))).thenReturn(job);
 
         // when & then
         mockMvc.perform(post("/api/v1/analysis/analyze/abc123"))
@@ -84,8 +84,8 @@ class AnalysisControllerTest {
                 .jobType(JobType.VIDEO_BIAS_ANALYSIS)
                 .status(JobStatus.FAILED)
                 .build();
-        when(youtubeTranscriptService.getOrFetchTranscriptEntity("abc123")).thenReturn(transcript);
-        when(analysisService.createAnalysisJobFromRawText(any(YoutubeTranscript.class))).thenReturn(job);
+        when(youtubeTranscriptService.getOrFetchTranscriptEntity("abc123", true)).thenReturn(transcript);
+        when(analysisService.getOrCreateAnalysisJob(any(YoutubeTranscript.class))).thenReturn(job);
 
         mockMvc.perform(post("/api/v1/analysis/analyze/abc123"))
                 .andExpect(status().isOk())

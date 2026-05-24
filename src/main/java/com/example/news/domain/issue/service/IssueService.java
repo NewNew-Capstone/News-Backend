@@ -32,9 +32,11 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDate;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
@@ -513,6 +515,22 @@ public class IssueService {
                 .mapToDouble(Double::doubleValue)
                 .average()
                 .orElse(0.0);
+        double avgOpinion = analyzedIds.stream()
+                .map(analysisByTarget::get)
+                .filter(java.util.Objects::nonNull)
+                .map(BiasAnalysisResult::getOpinionScore)
+                .filter(java.util.Objects::nonNull)
+                .mapToDouble(Double::doubleValue)
+                .average()
+                .orElse(0.0);
+        double avgFactRatio = analyzedIds.stream()
+                .map(analysisByTarget::get)
+                .filter(java.util.Objects::nonNull)
+                .map(BiasAnalysisResult::getFactRatio)
+                .filter(java.util.Objects::nonNull)
+                .mapToDouble(Double::doubleValue)
+                .average()
+                .orElse(0.0);
 
         Map<String, Integer> toneDistribution = new java.util.LinkedHashMap<>();
         toneDistribution.put("LOW_BIAS", 0);
@@ -533,6 +551,27 @@ public class IssueService {
         }
         long top1 = channelCounts.values().stream().max(Long::compareTo).orElse(0L);
         double top1Share = analyzedIds.isEmpty() ? 0.0 : (double) top1 / analyzedIds.size();
+        List<Long> analysisResultIds = analyzedIds.stream()
+                .map(analysisByTarget::get)
+                .filter(java.util.Objects::nonNull)
+                .map(BiasAnalysisResult::getId)
+                .filter(java.util.Objects::nonNull)
+                .toList();
+        List<String> topKeywords = analysisResultIds.stream()
+                .flatMap(id -> biasAnalysisKeywordRepository.findAllByBiasAnalysisResultId(id).stream())
+                .map(k -> k.getKeywordText())
+                .filter(k -> k != null && !k.isBlank())
+                .collect(Collectors.groupingBy(
+                        Function.identity(),
+                        LinkedHashMap::new,
+                        Collectors.counting()
+                ))
+                .entrySet()
+                .stream()
+                .sorted(Map.Entry.<String, Long>comparingByValue().reversed())
+                .limit(5)
+                .map(Map.Entry::getKey)
+                .toList();
 
         return IssueComparisonReportResponseDto.CountryMetrics.builder()
                 .countryCode(countryCode)
@@ -540,8 +579,11 @@ public class IssueService {
                 .totalViewCount(totalViews)
                 .avgViewCount(avgViews)
                 .avgOverallBiasScore(avgBias)
+                .avgOpinionScore(avgOpinion)
+                .avgFactRatio(avgFactRatio)
                 .toneDistribution(toneDistribution)
                 .channelTop1Share(top1Share)
+                .topKeywords(topKeywords)
                 .build();
     }
 
