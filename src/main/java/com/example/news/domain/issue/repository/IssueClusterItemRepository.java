@@ -28,4 +28,9 @@ public interface IssueClusterItemRepository extends JpaRepository<IssueClusterIt
     @Transactional
     @Query("delete from IssueClusterItem i where i.issueCluster.id = :issueClusterId")
     void deleteByIssueClusterId(Long issueClusterId);
+
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Transactional
+    @Query("delete from IssueClusterItem i where i.issueCluster.id = :issueClusterId and i.youtubeVideoId in :videoIds")
+    void deleteByIssueClusterIdAndYoutubeVideoIdIn(Long issueClusterId, Collection<Long> videoIds);
 }
