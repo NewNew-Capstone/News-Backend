@@ -8,6 +8,7 @@ import com.example.news.domain.analysis.service.AnalysisService;
 import com.example.news.domain.content.entity.YoutubeVideo;
 import com.example.news.domain.content.repository.YoutubeVideoRepository;
 import com.example.news.domain.content.service.YoutubeSearchService;
+import com.example.news.domain.content.service.YoutubeTranscriptService;
 import com.example.news.domain.issue.converter.IssueConverter;
 import com.example.news.domain.issue.dto.*;
 import com.example.news.domain.issue.entity.ComparisonCountryItem;
@@ -31,9 +32,11 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDate;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
@@ -56,6 +59,7 @@ public class IssueService {
     private final IssueGraphSyncService issueGraphSyncService;
     private final VideoGraphSyncService videoGraphSyncService;
     private final AnalysisService analysisService;
+    private final YoutubeTranscriptService youtubeTranscriptService;
 
     // 국가별 이슈 영상 검색
     @Transactional
@@ -204,7 +208,7 @@ public class IssueService {
     }
 
     // 반대 관점 영상 도출: 같은 IssueCluster 내에서 opinionScore 차이가 가장 큰 영상 반환
-    @Transactional(readOnly = true)
+    @Transactional
     public OpposingVideoResponseDto findOpposingVideo(Long videoId) {
         BiasAnalysisResult myResult = biasAnalysisResultRepository
                 .findTopByTargetIdAndTargetTypeOrderByCreatedAtDesc(videoId, TargetType.YOUTUBE_VIDEO)
@@ -252,6 +256,15 @@ public class IssueService {
         YoutubeVideo opposingVideo = youtubeVideoRepository.findById(opposing.getTargetId())
                 .orElseThrow(() -> new IssueException(IssueErrorCode.VIDEO_NOT_FOUND));
 
+        var opposingTranscript = youtubeTranscriptService.getOrFetchTranscriptEntity(
+                opposingVideo.getYoutubeVideoId(),
+                true
+        );
+        if (opposingTranscript != null) {
+            analysisService.enrichSummaryText(opposing, opposingTranscript);
+        }
+        analysisService.enrichScoreReasonSummary(opposing, "ko");
+
         List<String> keywords = biasAnalysisKeywordRepository
                 .findAllByBiasAnalysisResultId(opposing.getId())
                 .stream()
@@ -269,6 +282,7 @@ public class IssueService {
                 .overallBiasScore(opposing.getOverallBiasScore())
                 .opinionGap(opinionGap)
                 .scoreEvidence(opposing.getScoreEvidence())
+                .scoreReasonSummary(opposing.getScoreReasonSummary())
                 .analysisKeywords(keywords)
                 .build();
     }
@@ -501,6 +515,22 @@ public class IssueService {
                 .mapToDouble(Double::doubleValue)
                 .average()
                 .orElse(0.0);
+        double avgOpinion = analyzedIds.stream()
+                .map(analysisByTarget::get)
+                .filter(java.util.Objects::nonNull)
+                .map(BiasAnalysisResult::getOpinionScore)
+                .filter(java.util.Objects::nonNull)
+                .mapToDouble(Double::doubleValue)
+                .average()
+                .orElse(0.0);
+        double avgFactRatio = analyzedIds.stream()
+                .map(analysisByTarget::get)
+                .filter(java.util.Objects::nonNull)
+                .map(BiasAnalysisResult::getFactRatio)
+                .filter(java.util.Objects::nonNull)
+                .mapToDouble(Double::doubleValue)
+                .average()
+                .orElse(0.0);
 
         Map<String, Integer> toneDistribution = new java.util.LinkedHashMap<>();
         toneDistribution.put("LOW_BIAS", 0);
@@ -521,6 +551,27 @@ public class IssueService {
         }
         long top1 = channelCounts.values().stream().max(Long::compareTo).orElse(0L);
         double top1Share = analyzedIds.isEmpty() ? 0.0 : (double) top1 / analyzedIds.size();
+        List<Long> analysisResultIds = analyzedIds.stream()
+                .map(analysisByTarget::get)
+                .filter(java.util.Objects::nonNull)
+                .map(BiasAnalysisResult::getId)
+                .filter(java.util.Objects::nonNull)
+                .toList();
+        List<String> topKeywords = analysisResultIds.stream()
+                .flatMap(id -> biasAnalysisKeywordRepository.findAllByBiasAnalysisResultId(id).stream())
+                .map(k -> k.getKeywordText())
+                .filter(k -> k != null && !k.isBlank())
+                .collect(Collectors.groupingBy(
+                        Function.identity(),
+                        LinkedHashMap::new,
+                        Collectors.counting()
+                ))
+                .entrySet()
+                .stream()
+                .sorted(Map.Entry.<String, Long>comparingByValue().reversed())
+                .limit(5)
+                .map(Map.Entry::getKey)
+                .toList();
 
         return IssueComparisonReportResponseDto.CountryMetrics.builder()
                 .countryCode(countryCode)
@@ -528,8 +579,11 @@ public class IssueService {
                 .totalViewCount(totalViews)
                 .avgViewCount(avgViews)
                 .avgOverallBiasScore(avgBias)
+                .avgOpinionScore(avgOpinion)
+                .avgFactRatio(avgFactRatio)
                 .toneDistribution(toneDistribution)
                 .channelTop1Share(top1Share)
+                .topKeywords(topKeywords)
                 .build();
     }
 

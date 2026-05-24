@@ -8,7 +8,7 @@ import java.util.Optional;
 
 public interface YoutubeTranscriptRepository extends JpaRepository<YoutubeTranscript, Long> {
     // 영상에 연결된 자막 조회
-    Optional<YoutubeTranscript> findByYoutubeVideo(YoutubeVideo youtubeVideo);
+    Optional<YoutubeTranscript> findTopByYoutubeVideoOrderByCreatedAtDesc(YoutubeVideo youtubeVideo);
 
     boolean existsByYoutubeVideoId(Long youtubeVideoId);
 }

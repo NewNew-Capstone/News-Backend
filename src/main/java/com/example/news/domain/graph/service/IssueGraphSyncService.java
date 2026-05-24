@@ -44,6 +44,9 @@ public class IssueGraphSyncService {
                             .build());
             issueNode.setSearchKeyword(cluster.getSearchKeyword());
             issueNode.setName(cluster.getSearchKeyword());
+            if (cluster.getClusterType() != null) {
+                issueNode.setClusterType(cluster.getClusterType().name());
+            }
             issueNode.setPeriodStartDate(cluster.getPeriodStartDate());
             issueNode.setPeriodEndDate(cluster.getPeriodEndDate());
             issueNodeRepository.save(issueNode);

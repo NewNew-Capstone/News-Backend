@@ -16,5 +16,6 @@ public class OpposingVideoResponseDto {
     private Double       overallBiasScore;
     private Double       opinionGap;
     private String       scoreEvidence;
+    private String       scoreReasonSummary;
     private List<String> analysisKeywords;
 }

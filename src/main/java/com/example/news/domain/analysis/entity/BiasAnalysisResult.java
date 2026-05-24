@@ -56,4 +56,12 @@ public class BiasAnalysisResult extends BaseEntity {
     @Column(columnDefinition = "TEXT")
     private String scoreEvidence;
 
+    public void updateScoreReasonSummary(String scoreReasonSummary) {
+        this.scoreReasonSummary = scoreReasonSummary;
+    }
+
+    public void updateSummaryText(String summaryText) {
+        this.summaryText = summaryText;
+    }
+
 }

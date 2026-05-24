@@ -30,6 +30,9 @@ public class IssueNode {
     @Property("name")
     private String name;
 
+    @Property("cluster_type")
+    private String clusterType;
+
     @Property("period_start_date")
     private LocalDate periodStartDate;
 

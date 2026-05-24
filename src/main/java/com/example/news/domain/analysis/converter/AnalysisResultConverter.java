@@ -1,6 +1,8 @@
 package com.example.news.domain.analysis.converter;
 
 import com.example.news.domain.analysis.dto.AnalysisResultResponse;
+import com.example.news.domain.analysis.dto.FocusKeywordDto;
+import com.example.news.domain.analysis.entity.BiasAnalysisFocusKeyword;
 import com.example.news.domain.analysis.entity.BiasAnalysisKeyword;
 import com.example.news.domain.analysis.entity.BiasAnalysisResult;
 import com.example.news.domain.analysis.entity.BiasEvidence;
@@ -22,6 +24,15 @@ public class AnalysisResultConverter {
                 keyword.getKeywordText(),
                 keyword.getKeywordType(),
                 clampScore(keyword.getScore())
+        );
+    }
+
+    public static FocusKeywordDto toFocusKeywordItem(BiasAnalysisFocusKeyword keyword) {
+        return new FocusKeywordDto(
+                keyword.getKeywordText(),
+                keyword.getScore() == null ? 0.0 : clampScore(keyword.getScore()),
+                keyword.getOccurrenceCount() == null ? 0 : keyword.getOccurrenceCount(),
+                keyword.getSentenceCount() == null ? 0 : keyword.getSentenceCount()
         );
     }
 
@@ -61,6 +72,7 @@ public class AnalysisResultConverter {
     public static AnalysisResultResponse toResponse(
             BiasAnalysisResult result,
             List<AnalysisResultResponse.KeywordItem> keywords,
+            List<FocusKeywordDto> focusKeywords,
             List<AnalysisResultResponse.SentenceLabelItem> sentenceLabels,
             List<AnalysisResultResponse.EvidenceItem> evidences,
             List<AnalysisResultResponse.HighlightSpanItem> highlightSpans
@@ -87,6 +99,7 @@ public class AnalysisResultConverter {
                 emotionKeywords,
                 sentenceLabels,
                 evidences,
+                focusKeywords,
                 highlightSpans
         );
     }
