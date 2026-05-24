@@ -1,5 +1,6 @@
 package com.example.news.domain.content.service;
 
+import com.example.news.domain.analysis.service.AnalysisService;
 import com.example.news.domain.content.converter.YoutubeConverter;
 import com.example.news.domain.content.dto.VideoRankDto;
 import com.example.news.domain.content.dto.YoutubeVideoDto;
@@ -7,9 +8,6 @@ import com.example.news.domain.content.entity.Keyword;
 import com.example.news.domain.content.entity.YoutubeVideo;
 import com.example.news.domain.content.entity.YoutubeVideoKeyword;
 import com.example.news.domain.content.exception.YoutubeApiException;
-import java.util.Map;
-import java.util.function.Function;
-import java.util.stream.Collectors;
 import com.example.news.domain.content.repository.KeywordRepository;
 import com.example.news.domain.content.repository.YoutubeVideoKeywordRepository;
 import com.example.news.domain.content.repository.YoutubeVideoRepository;
@@ -48,6 +46,7 @@ public class YoutubeSearchService {
     private final VideoGraphSyncService videoGraphSyncService;
     private final ApplicationEventPublisher eventPublisher;
     private final RestTemplate restTemplate;
+    private final AnalysisService analysisService;
 
     @Value("${youtube.api.key}")
     private String apiKey;
@@ -135,7 +134,7 @@ public class YoutubeSearchService {
 
                     List<String> rankedIds = rankVideoIds(keyword, snippets);
 
-                    return rankedIds.stream()
+                    List<YoutubeVideo> finalVideos = rankedIds.stream()
                             .map(videoId -> cachedVideos.stream()
                                     .filter(v -> v.getYoutubeVideoId().equals(videoId))
                                     .findFirst()
@@ -143,6 +142,11 @@ public class YoutubeSearchService {
                             .filter(Objects::nonNull)
                             .filter(v -> !isShorts(v))
                             .limit(FINAL_RESULT_SIZE)
+                            .collect(Collectors.toList());
+
+                    finalVideos.forEach(v -> analysisService.triggerAnalysisAsync(v.getId()));
+
+                    return finalVideos.stream()
                             .map(YoutubeConverter::toVideoCard)
                             .collect(Collectors.toList());
                 })
