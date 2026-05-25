@@ -141,6 +141,21 @@ public class IssueService {
         Map<Long, YoutubeVideo> videoMap = youtubeVideoRepository.findAllById(videoIds).stream()
                 .collect(Collectors.toMap(YoutubeVideo::getId, v -> v));
 
+        // 영상-영상 유사도 기반 서브클러스터링 (같은 서브토픽끼리 묶기)
+        List<YoutubeVideo> allVideos = new java.util.ArrayList<>(videoMap.values());
+        Map<String, Integer> subClusterMap = youtubeSearchService.clusterVideos(allVideos);
+        if (!subClusterMap.isEmpty()) {
+            clusterItems.forEach(item -> {
+                YoutubeVideo video = videoMap.get(item.getYoutubeVideoId());
+                if (video != null) {
+                    Integer subClusterId = subClusterMap.get(video.getYoutubeVideoId());
+                    if (subClusterId != null) {
+                        issueClusterItemRepository.updateSubClusterId(item.getId(), subClusterId);
+                    }
+                }
+            });
+        }
+
         // 클러스터 내 모든 영상 백그라운드 분석 트리거 (커밋 이후 실행 보장)
         List<Long> triggerIds = videoIds;
         TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
@@ -231,12 +246,38 @@ public class IssueService {
 
         List<Long> candidateVideoIds;
         if (!clusterIds.isEmpty()) {
-            candidateVideoIds = issueClusterItemRepository.findByIssueClusterIdIn(clusterIds)
-                    .stream()
-                    .map(IssueClusterItem::getYoutubeVideoId)
-                    .filter(id -> !id.equals(videoId))
-                    .distinct()
-                    .toList();
+            List<IssueClusterItem> allItems = issueClusterItemRepository.findByIssueClusterIdIn(clusterIds);
+
+            // 내 영상의 subClusterId 조회
+            Integer mySubClusterId = allItems.stream()
+                    .filter(item -> item.getYoutubeVideoId().equals(videoId))
+                    .map(IssueClusterItem::getSubClusterId)
+                    .filter(java.util.Objects::nonNull)
+                    .findFirst()
+                    .orElse(null);
+
+            // 1차: 같은 서브클러스터 내 후보 (같은 서브토픽, 다른 나라)
+            if (mySubClusterId != null) {
+                candidateVideoIds = allItems.stream()
+                        .filter(item -> !item.getYoutubeVideoId().equals(videoId))
+                        .filter(item -> mySubClusterId.equals(item.getSubClusterId()))
+                        .filter(item -> item.getSimilarityScore() == null || item.getSimilarityScore() >= 0.3)
+                        .map(IssueClusterItem::getYoutubeVideoId)
+                        .distinct()
+                        .toList();
+            } else {
+                candidateVideoIds = List.of();
+            }
+
+            // 2차 fallback: 서브클러스터 후보 없으면 전체 클러스터에서 탐색
+            if (candidateVideoIds.isEmpty()) {
+                candidateVideoIds = allItems.stream()
+                        .filter(item -> !item.getYoutubeVideoId().equals(videoId))
+                        .filter(item -> item.getSimilarityScore() == null || item.getSimilarityScore() >= 0.3)
+                        .map(IssueClusterItem::getYoutubeVideoId)
+                        .distinct()
+                        .toList();
+            }
         } else {
             // 클러스터 미포함 영상: 같은 검색 키워드로 수집된 영상에서 후보 탐색
             candidateVideoIds = youtubeVideoKeywordRepository.findVideoIdsSharingKeywordWith(videoId);
@@ -300,7 +341,9 @@ public class IssueService {
 
     private void saveClusterItems(IssueCluster cluster, String countryCode,
                                   List<com.example.news.domain.content.dto.YoutubeVideoDto.VideoCard> videoCards) {
-        for (var card : videoCards) {
+        for (int i = 0; i < videoCards.size(); i++) {
+            var card = videoCards.get(i);
+            final int rankNo = i + 1;
             youtubeVideoRepository.findByYoutubeVideoId(card.getYoutubeVideoId())
                     .ifPresent(video -> issueClusterItemRepository.save(
                             IssueClusterItem.builder()
@@ -308,6 +351,8 @@ public class IssueService {
                                     .youtubeVideoId(video.getId())
                                     .countryCode(countryCode)
                                     .isRepresentative(false)
+                                    .similarityScore(card.getSimilarityScore())
+                                    .rankNo(rankNo)
                                     .sourceType(IssueClusterItemSourceType.AUTO)
                                     .build()
                     ));
