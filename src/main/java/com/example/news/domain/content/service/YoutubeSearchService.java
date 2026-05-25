@@ -145,7 +145,10 @@ public class YoutubeSearchService {
                             .limit(FINAL_RESULT_SIZE)
                             .collect(Collectors.toList());
 
-                    finalVideos.forEach(v -> analysisServiceProvider.getObject().triggerAnalysisAsync(v.getId()));
+                    AnalysisService analysisService = analysisServiceProvider.getIfAvailable();
+                    if (analysisService != null) {
+                        finalVideos.forEach(v -> analysisService.triggerAnalysisAsync(v.getId()));
+                    }
 
                     return finalVideos.stream()
                             .map(YoutubeConverter::toVideoCard)

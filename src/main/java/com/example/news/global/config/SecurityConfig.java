@@ -44,10 +44,12 @@ public class SecurityConfig {
             "/api/v1/enums/**", "/api/v1/home/**", "/ws-chat",
             "/api/v1/files/upload",
             "/api/v1/youtube/recommendations",
+            "/api/v1/youtube/*",
             "/api/v1/youtube/*/comments",
             "/api/v1/issues/popular-videos",
             "/api/v1/chat/welcome",
             "/api/v1/comparison/**",
+            "/api/videos/compare-on-click",
             "/api/videos/**"
     );
 
