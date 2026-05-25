@@ -51,6 +51,8 @@ public class IssueClusterItem extends BaseEntity {
 
     private Integer rankNo;
 
+    private Integer subClusterId;
+
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
     private IssueClusterItemSourceType sourceType;

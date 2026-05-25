@@ -4,7 +4,7 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 
 import java.util.List;
 
-public class VideoRankDto {
+public class VideoClusterDto {
 
     public record VideoItem(
             @JsonProperty("video_id") String videoId,
@@ -13,17 +13,16 @@ public class VideoRankDto {
     ) {}
 
     public record Request(
-            String keyword,
             List<VideoItem> videos,
-            @JsonProperty("top_n") int topN
+            @JsonProperty("n_clusters") Integer nClusters
     ) {}
 
-    public record RankedVideo(
-            @JsonProperty("video_id") String videoId,
-            double score
+    public record ClusterResult(
+            @JsonProperty("cluster_id") int clusterId,
+            @JsonProperty("video_ids") List<String> videoIds
     ) {}
 
     public record Response(
-            @JsonProperty("ranked_videos") List<RankedVideo> rankedVideos
+            List<ClusterResult> clusters
     ) {}
 }

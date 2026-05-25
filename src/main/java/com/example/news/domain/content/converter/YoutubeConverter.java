@@ -22,6 +22,10 @@ public class YoutubeConverter {
     // 커멘트 반영
 
     public static YoutubeVideoDto.VideoCard toVideoCard(YoutubeVideo video) {
+        return toVideoCard(video, null);
+    }
+
+    public static YoutubeVideoDto.VideoCard toVideoCard(YoutubeVideo video, Double similarityScore) {
         return YoutubeVideoDto.VideoCard.builder()
                 .youtubeVideoId(video.getYoutubeVideoId())
                 .title(video.getTitle())
@@ -31,6 +35,7 @@ public class YoutubeConverter {
                 .viewCount(video.getViewCount())
                 .durationSeconds(video.getDurationSeconds())
                 .countryCode(video.getCountryCode())
+                .similarityScore(similarityScore)
                 .build();
     }
 

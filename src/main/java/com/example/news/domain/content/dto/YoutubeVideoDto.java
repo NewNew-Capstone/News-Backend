@@ -22,6 +22,7 @@ public class YoutubeVideoDto {
         private Long viewCount;
         private Integer durationSeconds;
         private String countryCode;
+        private Double similarityScore;
     }
 
     @Getter

@@ -4,6 +4,7 @@ import com.example.news.domain.issue.entity.IssueClusterItem;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.Collection;
@@ -33,4 +34,9 @@ public interface IssueClusterItemRepository extends JpaRepository<IssueClusterIt
     @Transactional
     @Query("delete from IssueClusterItem i where i.issueCluster.id = :issueClusterId and i.youtubeVideoId in :videoIds")
     void deleteByIssueClusterIdAndYoutubeVideoIdIn(Long issueClusterId, Collection<Long> videoIds);
+
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Transactional
+    @Query("UPDATE IssueClusterItem i SET i.subClusterId = :subClusterId WHERE i.id = :id")
+    void updateSubClusterId(@Param("id") Long id, @Param("subClusterId") Integer subClusterId);
 }

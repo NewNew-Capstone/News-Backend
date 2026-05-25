@@ -2,6 +2,7 @@ package com.example.news.domain.content.service;
 
 import com.example.news.domain.analysis.service.AnalysisService;
 import com.example.news.domain.content.converter.YoutubeConverter;
+import com.example.news.domain.content.dto.VideoClusterDto;
 import com.example.news.domain.content.dto.VideoRankDto;
 import com.example.news.domain.content.dto.YoutubeVideoDto;
 import com.example.news.domain.content.entity.Keyword;
@@ -30,6 +31,7 @@ import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.stream.Collectors;
 
@@ -77,7 +79,8 @@ public class YoutubeSearchService {
         }
 
         // 3. Python 파이프라인: 코사인 유사도 기반 상위 30개 ID 반환 (숏폼 필터 버퍼)
-        List<String> top30Ids = rankVideoIds(keyword, snippets);
+        List<VideoRankDto.RankedVideo> ranked = rankVideoIds(keyword, snippets);
+        List<String> top30Ids = ranked.stream().map(VideoRankDto.RankedVideo::videoId).toList();
         if (top30Ids.isEmpty()) {
             return List.of();
         }
@@ -134,11 +137,11 @@ public class YoutubeSearchService {
                             ))
                             .collect(Collectors.toList());
 
-                    List<String> rankedIds = rankVideoIds(keyword, snippets);
+                    List<VideoRankDto.RankedVideo> cachedRanked = rankVideoIds(keyword, snippets);
 
-                    List<YoutubeVideo> finalVideos = rankedIds.stream()
-                            .map(videoId -> cachedVideos.stream()
-                                    .filter(v -> v.getYoutubeVideoId().equals(videoId))
+                    List<YoutubeVideo> finalVideos = cachedRanked.stream()
+                            .map(r -> cachedVideos.stream()
+                                    .filter(v -> v.getYoutubeVideoId().equals(r.videoId()))
                                     .findFirst()
                                     .orElse(null))
                             .filter(Objects::nonNull)
@@ -187,8 +190,8 @@ public class YoutubeSearchService {
         }
     }
 
-    // Python 파이프라인 호출 — 코사인 유사도 기반 상위 30개 video ID 반환 (숏폼 필터 후 20개 확보 버퍼)
-    private List<String> rankVideoIds(String keyword, List<VideoRankDto.VideoItem> snippets) {
+    // Python 파이프라인 호출 — 코사인 유사도 기반 상위 30개 (video_id + score) 반환
+    private List<VideoRankDto.RankedVideo> rankVideoIds(String keyword, List<VideoRankDto.VideoItem> snippets) {
         try {
             VideoRankDto.Request request = new VideoRankDto.Request(keyword, snippets, 30);
             VideoRankDto.Response response = restTemplate.postForObject(
@@ -196,25 +199,24 @@ public class YoutubeSearchService {
                     request,
                     VideoRankDto.Response.class
             );
-            if (response == null || response.rankedVideoIds() == null) {
+            if (response == null || response.rankedVideos() == null) {
                 log.warn("video ranking returned empty response for keyword={}", keyword);
                 return snippets.stream()
-                        .map(VideoRankDto.VideoItem::videoId)
                         .limit(30)
+                        .map(v -> new VideoRankDto.RankedVideo(v.videoId(), 1.0))
                         .collect(Collectors.toList());
             }
-            return response.rankedVideoIds();
+            return response.rankedVideos();
         } catch (Exception e) {
-            // 랭킹 실패 시 상위 30개를 그대로 반환 (서비스 중단 방지)
             log.warn("video ranking failed for keyword={}, fallback to first 30. reason={}", keyword, e.getMessage());
             return snippets.stream()
-                    .map(VideoRankDto.VideoItem::videoId)
                     .limit(30)
+                    .map(v -> new VideoRankDto.RankedVideo(v.videoId(), 1.0))
                     .collect(Collectors.toList());
         }
     }
 
-    // 국가별 비교용 검색 (번역된 키워드 + 지역/언어 + 날짜 범위)
+    // 국가별 비교용 검색 (번역된 키워드 + 지역/언어 + 날짜 범위) — 유사도 점수 포함
     @Transactional
     public List<YoutubeVideoDto.VideoCard> searchByRegion(
             String keyword,
@@ -223,10 +225,15 @@ public class YoutubeSearchService {
             LocalDate startDate,
             LocalDate endDate) {
 
-        List<String> videoIds = searchVideoIdsByRegion(keyword, regionCode, relevanceLanguage, startDate, endDate);
-        if (videoIds.isEmpty()) {
+        List<VideoRankDto.VideoItem> snippets = searchSnippetsByRegion(keyword, regionCode, relevanceLanguage, startDate, endDate);
+        if (snippets.isEmpty()) {
             return List.of();
         }
+
+        List<VideoRankDto.RankedVideo> ranked = rankVideoIds(keyword, snippets);
+        Map<String, Double> scoreMap = ranked.stream()
+                .collect(Collectors.toMap(VideoRankDto.RankedVideo::videoId, VideoRankDto.RankedVideo::score));
+        List<String> videoIds = ranked.stream().map(VideoRankDto.RankedVideo::videoId).collect(Collectors.toList());
 
         List<YoutubeVideo> videos = fetchAndSaveVideos(videoIds);
         translateTitlesIfNeeded(videos);
@@ -234,7 +241,7 @@ public class YoutubeSearchService {
 
         return videos.stream()
                 .filter(v -> !isShorts(v))
-                .map(YoutubeConverter::toVideoCard)
+                .map(v -> YoutubeConverter.toVideoCard(v, scoreMap.getOrDefault(v.getYoutubeVideoId(), null)))
                 .collect(Collectors.toList());
     }
 
@@ -262,7 +269,8 @@ public class YoutubeSearchService {
                 .collect(Collectors.toList());
     }
 
-    private List<String> searchVideoIdsByRegion(
+    // 국가별 검색 — snippet(title+description) 포함하여 반환 (rankVideoIds 입력용)
+    private List<VideoRankDto.VideoItem> searchSnippetsByRegion(
             String keyword,
             String regionCode,
             String relevanceLanguage,
@@ -288,8 +296,12 @@ public class YoutubeSearchService {
 
             SearchListResponse response = searchRequest.execute();
             return response.getItems().stream()
-                    .map(item -> item.getId().getVideoId())
-                    .filter(Objects::nonNull)
+                    .filter(item -> item.getId().getVideoId() != null)
+                    .map(item -> new VideoRankDto.VideoItem(
+                            item.getId().getVideoId(),
+                            item.getSnippet().getTitle() != null ? item.getSnippet().getTitle() : "",
+                            item.getSnippet().getDescription() != null ? item.getSnippet().getDescription() : ""
+                    ))
                     .collect(Collectors.toList());
         } catch (IOException e) {
             throw new YoutubeApiException(e.getMessage(), e);
@@ -392,6 +404,41 @@ public class YoutubeSearchService {
         String title = video.getTitle() != null ? video.getTitle().toLowerCase() : "";
         String description = video.getDescription() != null ? video.getDescription().toLowerCase() : "";
         return title.contains("#shorts") || description.contains("#shorts");
+    }
+
+    // 영상 목록을 파이프라인에 전송하여 서브클러스터 할당 결과 반환
+    // 반환: {youtubeVideoId → subClusterId}
+    public Map<String, Integer> clusterVideos(List<YoutubeVideo> videos) {
+        List<VideoClusterDto.VideoItem> items = videos.stream()
+                .map(v -> new VideoClusterDto.VideoItem(
+                        v.getYoutubeVideoId(),
+                        v.getTitle() != null ? v.getTitle() : "",
+                        v.getDescription() != null ? v.getDescription() : ""
+                ))
+                .toList();
+
+        try {
+            VideoClusterDto.Request request = new VideoClusterDto.Request(items, null);
+            VideoClusterDto.Response response = restTemplate.postForObject(
+                    aiPipelineBaseUrl + "/content/cluster-videos",
+                    request,
+                    VideoClusterDto.Response.class
+            );
+            if (response == null || response.clusters() == null) {
+                log.warn("cluster-videos returned empty response, skipping sub-clustering");
+                return Map.of();
+            }
+            Map<String, Integer> videoIdToCluster = new java.util.HashMap<>();
+            for (VideoClusterDto.ClusterResult cluster : response.clusters()) {
+                for (String videoId : cluster.videoIds()) {
+                    videoIdToCluster.put(videoId, cluster.clusterId());
+                }
+            }
+            return videoIdToCluster;
+        } catch (Exception e) {
+            log.warn("cluster-videos failed, skipping sub-clustering. reason={}", e.getMessage());
+            return Map.of();
+        }
     }
 
     // 영상-키워드 연결 중복 없이 저장
