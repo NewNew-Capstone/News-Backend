@@ -6,6 +6,7 @@ import com.example.news.domain.analysis.repository.BiasAnalysisKeywordRepository
 import com.example.news.domain.analysis.repository.BiasAnalysisResultRepository;
 import com.example.news.domain.analysis.service.AnalysisService;
 import com.example.news.domain.content.entity.YoutubeVideo;
+import com.example.news.domain.content.repository.YoutubeVideoKeywordRepository;
 import com.example.news.domain.content.repository.YoutubeVideoRepository;
 import com.example.news.domain.content.service.YoutubeSearchService;
 import com.example.news.domain.content.service.YoutubeTranscriptService;
@@ -50,6 +51,7 @@ public class IssueService {
     private final KeywordTranslationService keywordTranslationService;
     private final YoutubeSearchService youtubeSearchService;
     private final YoutubeVideoRepository youtubeVideoRepository;
+    private final YoutubeVideoKeywordRepository youtubeVideoKeywordRepository;
     private final IssueClusterRepository issueClusterRepository;
     private final IssueClusterItemRepository issueClusterItemRepository;
     private final ComparisonResultRepository comparisonResultRepository;
@@ -219,7 +221,7 @@ public class IssueService {
         }
         double myBiasScore = myResult.getOverallBiasScore();
 
-        // 같은 클러스터 내 후보 수집
+        // 같은 클러스터 내 후보 수집 (클러스터 미포함 시 키워드 공유 영상으로 fallback)
         Set<Long> clusterIds = issueClusterItemRepository.findByYoutubeVideoId(videoId)
                 .stream()
                 .map(IssueClusterItem::getIssueCluster)
@@ -227,16 +229,18 @@ public class IssueService {
                 .map(IssueCluster::getId)
                 .collect(Collectors.toSet());
 
-        if (clusterIds.isEmpty()) {
-            throw new IssueException(IssueErrorCode.OPPOSING_VIDEO_NOT_FOUND);
+        List<Long> candidateVideoIds;
+        if (!clusterIds.isEmpty()) {
+            candidateVideoIds = issueClusterItemRepository.findByIssueClusterIdIn(clusterIds)
+                    .stream()
+                    .map(IssueClusterItem::getYoutubeVideoId)
+                    .filter(id -> !id.equals(videoId))
+                    .distinct()
+                    .toList();
+        } else {
+            // 클러스터 미포함 영상: 같은 검색 키워드로 수집된 영상에서 후보 탐색
+            candidateVideoIds = youtubeVideoKeywordRepository.findVideoIdsSharingKeywordWith(videoId);
         }
-
-        List<Long> candidateVideoIds = issueClusterItemRepository.findByIssueClusterIdIn(clusterIds)
-                .stream()
-                .map(IssueClusterItem::getYoutubeVideoId)
-                .filter(id -> !id.equals(videoId))
-                .distinct()
-                .toList();
 
         if (candidateVideoIds.isEmpty()) {
             throw new IssueException(IssueErrorCode.OPPOSING_VIDEO_NOT_FOUND);
@@ -256,14 +260,21 @@ public class IssueService {
         YoutubeVideo opposingVideo = youtubeVideoRepository.findById(opposing.getTargetId())
                 .orElseThrow(() -> new IssueException(IssueErrorCode.VIDEO_NOT_FOUND));
 
-        var opposingTranscript = youtubeTranscriptService.getOrFetchTranscriptEntity(
-                opposingVideo.getYoutubeVideoId(),
-                true
-        );
-        if (opposingTranscript != null) {
-            analysisService.enrichSummaryText(opposing, opposingTranscript);
+        boolean needsSummary = opposing.getSummaryText() == null || opposing.getSummaryText().isBlank();
+        boolean needsScoreReason = opposing.getScoreReasonSummary() == null || opposing.getScoreReasonSummary().isBlank();
+
+        if (needsSummary) {
+            var opposingTranscript = youtubeTranscriptService.getOrFetchTranscriptEntity(
+                    opposingVideo.getYoutubeVideoId(),
+                    true
+            );
+            if (opposingTranscript != null) {
+                analysisService.enrichSummaryText(opposing, opposingTranscript);
+            }
         }
-        analysisService.enrichScoreReasonSummary(opposing, "ko");
+        if (needsScoreReason) {
+            analysisService.enrichScoreReasonSummary(opposing, "ko");
+        }
 
         List<String> keywords = biasAnalysisKeywordRepository
                 .findAllByBiasAnalysisResultId(opposing.getId())

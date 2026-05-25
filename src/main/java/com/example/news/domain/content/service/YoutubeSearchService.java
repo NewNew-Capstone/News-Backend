@@ -17,8 +17,10 @@ import com.google.api.services.youtube.YouTube;
 import com.google.api.services.youtube.model.*;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.client.RestTemplate;
@@ -46,7 +48,10 @@ public class YoutubeSearchService {
     private final VideoGraphSyncService videoGraphSyncService;
     private final ApplicationEventPublisher eventPublisher;
     private final RestTemplate restTemplate;
-    private final AnalysisService analysisService;
+
+    @Lazy
+    @Autowired
+    private AnalysisService analysisService;
 
     @Value("${youtube.api.key}")
     private String apiKey;
@@ -56,6 +61,7 @@ public class YoutubeSearchService {
     private String aiPipelineBaseUrl;
 
     private static final int SHORTS_MAX_DURATION_SECONDS = 180; // YouTube Shorts 최대 3분
+    private static final int MIN_NEWS_DURATION_SECONDS = 60;    // 뉴스 영상 최소 1분
     private static final int FINAL_RESULT_SIZE = 20;
     private static final int CACHE_MIN_SIZE = 20; // DB 캐시 사용 최소 영상 수
 
@@ -228,6 +234,7 @@ public class YoutubeSearchService {
         linkKeywordToVideos(keyword, videos);
 
         return videos.stream()
+                .filter(v -> !isShorts(v))
                 .map(YoutubeConverter::toVideoCard)
                 .collect(Collectors.toList());
     }
@@ -251,6 +258,7 @@ public class YoutubeSearchService {
         linkKeywordToVideos(keyword, videos);
 
         return videos.stream()
+                .filter(v -> !isShorts(v))
                 .map(YoutubeConverter::toVideoCard)
                 .collect(Collectors.toList());
     }
@@ -371,10 +379,15 @@ public class YoutubeSearchService {
         return saved;
     }
 
-    // YouTube Shorts 판별 — 180초 이하이면서 #Shorts 태그 포함된 경우
+    // 뉴스 영상 부적합 판별 — 1분 미만이거나, 3분 이하이면서 #Shorts 태그 포함된 경우
     private boolean isShorts(YoutubeVideo video) {
-        if (video.getDurationSeconds() == null
-                || video.getDurationSeconds() > SHORTS_MAX_DURATION_SECONDS) {
+        if (video.getDurationSeconds() == null) {
+            return false;
+        }
+        if (video.getDurationSeconds() < MIN_NEWS_DURATION_SECONDS) {
+            return true;
+        }
+        if (video.getDurationSeconds() > SHORTS_MAX_DURATION_SECONDS) {
             return false;
         }
         String title = video.getTitle() != null ? video.getTitle().toLowerCase() : "";

@@ -85,8 +85,6 @@ public class AnalysisService {
         if (existing.isPresent() && existing.get().getAnalysisJob() != null) {
             BiasAnalysisResult existingResult = existing.get();
             log.info("분석 결과 캐시 히트 - videoId={}, jobId={}", videoId, existingResult.getAnalysisJob().getId());
-            enrichSummaryText(existingResult, transcript);
-            enrichScoreReasonSummary(existingResult, transcript);
             return new AnalysisExecutionResult(existingResult.getAnalysisJob(), null);
         }
         return createAnalysisExecutionFromRawText(transcript, true);
