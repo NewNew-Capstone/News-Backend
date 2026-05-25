@@ -3,12 +3,17 @@ package com.example.news.domain.comparison.service;
 import com.example.news.domain.analysis.enums.TargetType;
 import com.example.news.domain.analysis.repository.BiasAnalysisResultRepository;
 import com.example.news.domain.comparison.dto.ComparisonVideoTargetResponse;
+import com.example.news.domain.comparison.dto.click.ClickVideoCompareRequest;
+import com.example.news.domain.comparison.dto.click.ClickVideoCompareResponse;
+import com.example.news.domain.comparison.dto.click.PythonClickedVideoRequest;
+import com.example.news.domain.comparison.dto.click.PythonClickedVideoResponse;
 import com.example.news.domain.comparison.dto.collect.MultilingualKeywordExpandResponse;
 import com.example.news.domain.comparison.exception.ComparisonException;
 import com.example.news.domain.comparison.exception.code.ComparisonErrorCode;
 import com.example.news.domain.content.entity.YoutubeVideo;
 import com.example.news.domain.content.repository.YoutubeVideoRepository;
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import lombok.NonNull;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -17,6 +22,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.web.util.UriComponentsBuilder;
 import org.springframework.web.reactive.function.client.WebClient;
+import org.springframework.web.reactive.function.client.WebClientException;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
 
 import java.util.List;
@@ -31,7 +37,7 @@ public class ComparisonProxyService {
     private final YoutubeVideoRepository youtubeVideoRepository;
     private final BiasAnalysisResultRepository biasAnalysisResultRepository;
 
-    @Value("${python.base-url}")
+    @Value("${python.kg.base-url:${python.base-url}}")
     private String pythonBaseUrl;
 
     @PostConstruct
@@ -112,6 +118,85 @@ public class ComparisonProxyService {
         }
     }
 
+    public ClickVideoCompareResponse compareOnClick(ClickVideoCompareRequest request) {
+        if (request == null || request.video() == null) {
+            throw new ComparisonException(
+                    ComparisonErrorCode.INVALID_COMPARISON_REQUEST,
+                    "video는 필수입니다."
+            );
+        }
+
+        String keyword = requireNotBlank(request.keyword(), "keyword는 비어 있을 수 없습니다.");
+        String selectedVideoId = requireNotBlank(request.video().videoId(), "video.videoId는 비어 있을 수 없습니다.");
+        PythonClickedVideoRequest pythonRequest = PythonClickedVideoRequest.from(request, keyword);
+        String path = "/kg/realtime-ingest/clicked-video";
+
+        try {
+            PythonClickedVideoResponse response = webClient.post()
+                    .uri(pythonBaseUrl + path)
+                    .bodyValue(pythonRequest)
+                    .retrieve()
+                    .bodyToMono(PythonClickedVideoResponse.class)
+                    .block();
+
+            if (response == null) {
+                throw new ComparisonException(
+                        ComparisonErrorCode.COMPARISON_API_FAILED,
+                        "Python clicked-video API 응답이 비어 있습니다."
+                );
+            }
+
+            return toClickVideoCompareResponse(response, selectedVideoId);
+        } catch (WebClientResponseException e) {
+            log.warn("[ComparisonProxy] {} 호출 실패 - status={}, body={}",
+                    path, e.getStatusCode(), e.getResponseBodyAsString());
+            throw new ComparisonException(
+                    ComparisonErrorCode.COMPARISON_API_FAILED,
+                    "Python clicked-video API 호출 실패: " + e.getStatusCode(),
+                    e
+            );
+        } catch (WebClientException e) {
+            log.warn("[ComparisonProxy] {} 연결 실패 - reason={}", path, e.getMessage());
+            throw new ComparisonException(
+                    ComparisonErrorCode.COMPARISON_API_FAILED,
+                    "Python clicked-video API 연결에 실패했습니다.",
+                    e
+            );
+        }
+    }
+
+    public JsonNode getCompareJob(String requestId) {
+        String trimmedRequestId = requireNotBlank(requestId, "requestId는 비어 있을 수 없습니다.");
+        String path = "/kg/realtime-ingest/jobs/{requestId}";
+
+        try {
+            return webClient.get()
+                    .uri(UriComponentsBuilder.fromUriString(pythonBaseUrl + path)
+                            .buildAndExpand(trimmedRequestId)
+                            .encode()
+                            .toUri())
+                    .retrieve()
+                    .bodyToMono(JsonNode.class)
+                    .block();
+        } catch (WebClientResponseException e) {
+            log.warn("[ComparisonProxy] /kg/realtime-ingest/jobs/{} 호출 실패 - status={}, body={}",
+                    trimmedRequestId, e.getStatusCode(), e.getResponseBodyAsString());
+            throw new ComparisonException(
+                    ComparisonErrorCode.COMPARISON_API_FAILED,
+                    "Python compare job API 호출 실패: " + e.getStatusCode(),
+                    e
+            );
+        } catch (WebClientException e) {
+            log.warn("[ComparisonProxy] /kg/realtime-ingest/jobs/{} 연결 실패 - reason={}",
+                    trimmedRequestId, e.getMessage());
+            throw new ComparisonException(
+                    ComparisonErrorCode.COMPARISON_API_FAILED,
+                    "Python compare job API 연결에 실패했습니다.",
+                    e
+            );
+        }
+    }
+
     public ComparisonVideoTargetResponse getAnalysisTarget(String youtubeVideoId) {
         YoutubeVideo video = youtubeVideoRepository.findByYoutubeVideoId(youtubeVideoId)
                 .orElseThrow(() -> new ComparisonException(
@@ -184,6 +269,58 @@ public class ComparisonProxyService {
                     "limit은 1~50 범위여야 합니다."
             );
         }
+    }
+
+    private ClickVideoCompareResponse toClickVideoCompareResponse(
+            PythonClickedVideoResponse response,
+            String fallbackSelectedVideoId
+    ) {
+        String selectedVideoId = response.selectedVideoId() == null || response.selectedVideoId().isBlank()
+                ? fallbackSelectedVideoId
+                : response.selectedVideoId();
+        JsonNode currentGraph = response.currentGraph();
+
+        if (currentGraph != null && !currentGraph.isNull()) {
+            ClickVideoCompareResponse.Graph graph = new ClickVideoCompareResponse.Graph(
+                    graphField(currentGraph, "nodes"),
+                    graphField(currentGraph, "edges"),
+                    graphField(currentGraph, "country_perspectives")
+            );
+            return new ClickVideoCompareResponse(
+                    response.requestId(),
+                    selectedVideoId,
+                    ClickVideoCompareResponse.Status.READY,
+                    graph
+            );
+        }
+
+        return new ClickVideoCompareResponse(
+                response.requestId(),
+                selectedVideoId,
+                ClickVideoCompareResponse.Status.PROCESSING,
+                null
+        );
+    }
+
+    private JsonNode graphField(JsonNode graph, String fieldName) {
+        JsonNode field = graph.get(fieldName);
+        if (field == null && "country_perspectives".equals(fieldName)) {
+            field = graph.get("countryPerspectives");
+        }
+        if (field == null || field.isNull()) {
+            return JsonNodeFactory.instance.arrayNode();
+        }
+        return field;
+    }
+
+    private String requireNotBlank(String value, String message) {
+        if (value == null || value.trim().isBlank()) {
+            throw new ComparisonException(
+                    ComparisonErrorCode.INVALID_COMPARISON_REQUEST,
+                    message
+            );
+        }
+        return value.trim();
     }
 
     private List<String> normalizeKeywords(List<String> keywords) {

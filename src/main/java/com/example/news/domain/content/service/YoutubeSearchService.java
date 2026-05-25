@@ -17,10 +17,9 @@ import com.google.api.services.youtube.YouTube;
 import com.google.api.services.youtube.model.*;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.ApplicationEventPublisher;
-import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.client.RestTemplate;
@@ -48,10 +47,7 @@ public class YoutubeSearchService {
     private final VideoGraphSyncService videoGraphSyncService;
     private final ApplicationEventPublisher eventPublisher;
     private final RestTemplate restTemplate;
-
-    @Lazy
-    @Autowired
-    private AnalysisService analysisService;
+    private final ObjectProvider<AnalysisService> analysisServiceProvider;
 
     @Value("${youtube.api.key}")
     private String apiKey;
@@ -150,7 +146,10 @@ public class YoutubeSearchService {
                             .limit(FINAL_RESULT_SIZE)
                             .collect(Collectors.toList());
 
-                    finalVideos.forEach(v -> analysisService.triggerAnalysisAsync(v.getId()));
+                    AnalysisService analysisService = analysisServiceProvider.getIfAvailable();
+                    if (analysisService != null) {
+                        finalVideos.forEach(v -> analysisService.triggerAnalysisAsync(v.getId()));
+                    }
 
                     return finalVideos.stream()
                             .map(YoutubeConverter::toVideoCard)
