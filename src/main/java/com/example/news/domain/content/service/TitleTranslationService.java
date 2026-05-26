@@ -25,6 +25,30 @@ public class TitleTranslationService {
     @Value("${google.translate.api-key}")
     private String apiKey;
 
+    public String translateFromKorean(String text, String targetLang) {
+        if (text == null || text.isBlank()) return text;
+        try {
+            URI uri = UriComponentsBuilder.fromHttpUrl(TRANSLATE_URL)
+                    .queryParam("q", text)
+                    .queryParam("source", "ko")
+                    .queryParam("target", targetLang)
+                    .encode()
+                    .build()
+                    .toUri();
+            String response = restTemplate.getForObject(uri, String.class);
+            JsonNode root = objectMapper.readTree(response);
+            String translated = root.path("data")
+                    .path("translations")
+                    .get(0)
+                    .path("translatedText")
+                    .asText();
+            return HtmlUtils.htmlUnescape(translated);
+        } catch (Exception e) {
+            log.warn("키워드 번역 실패, 원본 유지: {}", e.getMessage());
+            return text;
+        }
+    }
+
     public String translateToKorean(String text) {
         if (text == null || text.isBlank()) return text;
 

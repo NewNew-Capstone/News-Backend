@@ -30,9 +30,11 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 @Slf4j
@@ -72,14 +74,27 @@ public class YoutubeSearchService {
             return cached;
         }
 
-        // 2. 캐시 미스 — YouTube에서 50개 후보 snippet 수집 (title+description 포함, 날짜순)
-        List<VideoRankDto.VideoItem> snippets = searchSnippets(keyword);
-        if (snippets.isEmpty()) {
+        // 2. 캐시 미스 — YouTube에서 KR 50개 + US 50개 후보 snippet 수집
+        List<VideoRankDto.VideoItem> allSnippets = new ArrayList<>(searchSnippets(keyword));
+        try {
+            String usKeyword = titleTranslationService.translateFromKorean(keyword, "en");
+            List<VideoRankDto.VideoItem> usSnippets = searchSnippetsByRegion(usKeyword, "US", "en", null, null);
+            Set<String> existingIds = allSnippets.stream()
+                    .map(VideoRankDto.VideoItem::videoId)
+                    .collect(Collectors.toSet());
+            usSnippets.stream()
+                    .filter(s -> !existingIds.contains(s.videoId()))
+                    .forEach(allSnippets::add);
+            log.info("US 스니펫 수집 완료: keyword={}, usKeyword={}, us={}", keyword, usKeyword, usSnippets.size());
+        } catch (Exception e) {
+            log.warn("US 영상 수집 실패, KR만 사용: {}", e.getMessage());
+        }
+        if (allSnippets.isEmpty()) {
             return List.of();
         }
 
         // 3. Python 파이프라인: 코사인 유사도 기반 상위 30개 ID 반환 (숏폼 필터 버퍼)
-        List<VideoRankDto.RankedVideo> ranked = rankVideoIds(keyword, snippets);
+        List<VideoRankDto.RankedVideo> ranked = rankVideoIds(keyword, allSnippets);
         List<String> top30Ids = ranked.stream().map(VideoRankDto.RankedVideo::videoId).toList();
         if (top30Ids.isEmpty()) {
             return List.of();

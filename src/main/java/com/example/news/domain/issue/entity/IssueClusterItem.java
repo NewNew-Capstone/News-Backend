@@ -56,4 +56,8 @@ public class IssueClusterItem extends BaseEntity {
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
     private IssueClusterItemSourceType sourceType;
+
+    public void updateSubClusterId(Integer subClusterId) {
+        this.subClusterId = subClusterId;
+    }
 }

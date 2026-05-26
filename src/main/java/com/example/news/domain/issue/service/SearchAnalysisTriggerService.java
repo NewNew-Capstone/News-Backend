@@ -3,6 +3,7 @@ package com.example.news.domain.issue.service;
 import com.example.news.domain.analysis.service.AnalysisService;
 import com.example.news.domain.content.entity.YoutubeVideo;
 import com.example.news.domain.content.repository.YoutubeVideoRepository;
+import com.example.news.domain.content.service.YoutubeSearchService;
 import com.example.news.domain.issue.entity.IssueCluster;
 import com.example.news.domain.issue.entity.IssueClusterItem;
 import com.example.news.domain.issue.enums.ClusterStatus;
@@ -21,7 +22,10 @@ import org.springframework.transaction.event.TransactionPhase;
 import org.springframework.transaction.event.TransactionalEventListener;
 
 import java.time.LocalDate;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
 
 @Slf4j
 @Service
@@ -32,6 +36,7 @@ public class SearchAnalysisTriggerService {
     private final IssueClusterItemRepository issueClusterItemRepository;
     private final YoutubeVideoRepository youtubeVideoRepository;
     private final AnalysisService analysisService;
+    private final YoutubeSearchService youtubeSearchService;
 
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     @Async
@@ -51,9 +56,12 @@ public class SearchAnalysisTriggerService {
         );
 
         List<YoutubeVideo> videos = youtubeVideoRepository.findAllById(event.videoDbIds());
+
+        // IssueClusterItem 저장
+        List<IssueClusterItem> savedItems = new ArrayList<>();
         for (YoutubeVideo video : videos) {
             String countryCode = video.getCountryCode() != null ? video.getCountryCode() : "KR";
-            issueClusterItemRepository.save(
+            IssueClusterItem item = issueClusterItemRepository.save(
                     IssueClusterItem.builder()
                             .issueCluster(cluster)
                             .youtubeVideoId(video.getId())
@@ -62,9 +70,25 @@ public class SearchAnalysisTriggerService {
                             .sourceType(IssueClusterItemSourceType.AUTO)
                             .build()
             );
+            savedItems.add(item);
             analysisService.triggerAnalysisAsync(video.getId());
         }
 
-        log.info("일반 검색 백그라운드 처리 완료 (keyword={}, videos={})", event.keyword(), videos.size());
+        // K-means 클러스터링 → subClusterId 저장
+        Map<String, Integer> clusterMap = youtubeSearchService.clusterVideos(videos);
+        if (!clusterMap.isEmpty()) {
+            Map<Long, String> dbIdToYoutubeId = videos.stream()
+                    .collect(Collectors.toMap(YoutubeVideo::getId, YoutubeVideo::getYoutubeVideoId));
+            for (IssueClusterItem item : savedItems) {
+                String youtubeVideoId = dbIdToYoutubeId.get(item.getYoutubeVideoId());
+                Integer subClusterId = clusterMap.get(youtubeVideoId);
+                if (subClusterId != null) {
+                    item.updateSubClusterId(subClusterId);
+                }
+            }
+        }
+
+        log.info("일반 검색 백그라운드 처리 완료 (keyword={}, videos={}, clusters={})",
+                event.keyword(), videos.size(), clusterMap.size());
     }
 }
