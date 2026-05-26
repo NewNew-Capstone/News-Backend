@@ -230,7 +230,7 @@ class ComparisonControllerTest {
                                 {"keyword":" ","video":{"videoId":"q0Jo5F8pHbs"}}
                                 """))
                 .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.status.statusCode").value("C007"));
+                .andExpect(jsonPath("$.status.statusCode").value("CP001"));
     }
 
     @Test

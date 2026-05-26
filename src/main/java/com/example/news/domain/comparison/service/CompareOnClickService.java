@@ -28,6 +28,7 @@ import java.util.regex.Pattern;
 @RequiredArgsConstructor
 public class CompareOnClickService {
 
+    private static final String DEMO_LOG_PREFIX = "[DEMO-COMPARE]";
     private static final int DEFAULT_LIMIT_PER_COUNTRY = 3;
     private static final int SEARCH_BUFFER_MULTIPLIER = 2;
     private static final List<String> COUNTRIES = List.of("KR", "US", "CN");
@@ -55,7 +56,19 @@ public class CompareOnClickService {
         YoutubeVideo selectedVideo = youtubeVideoService.getOrFetchVideoEntity(request.youtubeVideoId());
         String sourceCountryCode = resolveCountryCode(request, selectedVideo);
         String searchKeyword = resolveSearchKeyword(request, selectedVideo);
+        log.info("{} step=2 action=clicked_video_selected_legacy video_id={} title=\"{}\" country_code={} language={}",
+                DEMO_LOG_PREFIX,
+                request.youtubeVideoId(),
+                compactLogText(firstNonBlank(request.title(), selectedVideo.getTitle())),
+                sourceCountryCode,
+                firstNonBlank(request.defaultLanguageCode(), selectedVideo.getDefaultLanguageCode()));
         MultilingualKeywordExpandResponse expandedKeywords = expandKeywords(searchKeyword);
+
+        List<String> candidateCountries = COUNTRIES.stream()
+                .filter(countryCode -> !countryCode.equals(sourceCountryCode))
+                .toList();
+        log.info("{} step=5 action=candidate_scope_legacy source_country={} candidate_countries={} excluded={}",
+                DEMO_LOG_PREFIX, sourceCountryCode, candidateCountries, List.of(sourceCountryCode));
 
         List<CompareOnClickResponse.CountryVideoSection> sections = COUNTRIES.stream()
                 .filter(countryCode -> !countryCode.equals(sourceCountryCode))
@@ -74,6 +87,8 @@ public class CompareOnClickService {
     public CompareOnClickResponse recommendByKeyword(String keyword, Integer limitPerCountry) {
         int limit = resolveLimit(limitPerCountry);
         String searchKeyword = normalizeSearchKeyword(keyword);
+        log.info("{} step=1 action=search_keyword_received keyword=\"{}\" limit={} endpoint=/api/v1/comparison/country-recommendations",
+                DEMO_LOG_PREFIX, compactLogText(searchKeyword), limit);
         MultilingualKeywordExpandResponse expandedKeywords = expandKeywords(searchKeyword);
         List<CompareOnClickResponse.CountryVideoSection> sections = COUNTRIES.stream()
                 .map(countryCode -> buildCountrySection(countryCode, expandedKeywords, null, limit))
@@ -127,11 +142,17 @@ public class CompareOnClickService {
             }
         }
 
+        List<YoutubeVideoDto.VideoCard> countryVideos = new ArrayList<>(videosById.values());
+        log.info("{} step=7 action=country_top_results_legacy country={} top_video_ids={}",
+                DEMO_LOG_PREFIX,
+                countryCode,
+                countryVideos.stream().map(YoutubeVideoDto.VideoCard::getYoutubeVideoId).toList());
+
         return CompareOnClickResponse.CountryVideoSection.builder()
                 .countryCode(countryCode)
                 .countryName(COUNTRY_NAME_BY_CODE.get(countryCode))
                 .languageCode(languageCode)
-                .videos(new ArrayList<>(videosById.values()))
+                .videos(countryVideos)
                 .build();
     }
 
@@ -156,7 +177,14 @@ public class CompareOnClickService {
 
     private MultilingualKeywordExpandResponse expandKeywords(String searchKeyword) {
         try {
-            return comparisonProxyService.expandMultilingualKeywords(searchKeyword);
+            MultilingualKeywordExpandResponse response = comparisonProxyService.expandMultilingualKeywords(searchKeyword);
+            log.info("{} step=4 action=multilingual_keyword_expansion_legacy source_keyword=\"{}\" ko={} en={} zh={}",
+                    DEMO_LOG_PREFIX,
+                    compactLogText(searchKeyword),
+                    response.expandedKeywords().ko(),
+                    response.expandedKeywords().en(),
+                    response.expandedKeywords().zh());
+            return response;
         } catch (ComparisonException e) {
             log.warn("compare-on-click keyword expansion failed. keyword={}, reason={}",
                     searchKeyword, e.getMessage());
@@ -284,5 +312,16 @@ public class CompareOnClickService {
         }
 
         return Math.max(1, Math.min(limitPerCountry, 10));
+    }
+
+    private String compactLogText(String value) {
+        if (value == null) {
+            return "";
+        }
+        String compacted = value.replaceAll("\\s+", " ").trim();
+        if (compacted.length() <= 120) {
+            return compacted;
+        }
+        return compacted.substring(0, 117).trim() + "...";
     }
 }

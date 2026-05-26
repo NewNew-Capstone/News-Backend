@@ -65,7 +65,7 @@ class CompareOnClickControllerTest {
         when(compareOnClickService.compareOnClick(any(CompareOnClickRequest.class), eq(3)))
                 .thenReturn(response);
 
-        mockMvc.perform(post("/api/videos/compare-on-click")
+        mockMvc.perform(post("/api/v1/comparison/compare-on-click")
                         .contentType("application/json")
                         .content("""
                                 {"youtubeVideoId":"source1","title":"트럼프 대만","defaultLanguageCode":"ko"}
@@ -78,7 +78,7 @@ class CompareOnClickControllerTest {
 
     @Test
     void compareOnClick_returns400_whenYoutubeVideoIdMissing() throws Exception {
-        mockMvc.perform(post("/api/videos/compare-on-click")
+        mockMvc.perform(post("/api/v1/comparison/compare-on-click")
                         .contentType("application/json")
                         .content("""
                                 {"title":"트럼프 대만"}
