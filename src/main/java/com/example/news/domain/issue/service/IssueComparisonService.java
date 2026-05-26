@@ -597,6 +597,22 @@ public class IssueComparisonService {
             return;
         }
 
+        // 삭제 전 기존 subClusterId 보존 + 가장 작은 subCluster 계산
+        List<IssueClusterItem> existingItems = issueClusterItemRepository.findByIssueClusterId(originalCluster.getId());
+        Map<Long, Integer> existingSubClusterIds = existingItems.stream()
+                .filter(item -> item.getSubClusterId() != null)
+                .collect(Collectors.toMap(
+                        IssueClusterItem::getYoutubeVideoId,
+                        IssueClusterItem::getSubClusterId,
+                        (a, b) -> a
+                ));
+        Integer smallestSubClusterId = existingSubClusterIds.values().stream()
+                .collect(Collectors.groupingBy(id -> id, Collectors.counting()))
+                .entrySet().stream()
+                .min(Map.Entry.comparingByValue())
+                .map(Map.Entry::getKey)
+                .orElse(0);
+
         // 분석된 영상의 기존 아이템만 삭제 — 미분석 영상은 클러스터에 유지해 반대 영상 탐색에 활용
         Set<Long> analyzedVideoIds = groups.stream()
                 .flatMap(g -> g.members.stream())
@@ -632,14 +648,18 @@ public class IssueComparisonService {
 
             IssueCluster finalCluster = cluster;
             for (ScoredCandidate sc : uniqueMembers) {
+                Long videoId = sc.candidate().getVideoId();
+                // 기존 subClusterId 보존, 없으면 가장 작은 subCluster에 배정
+                Integer subClusterId = existingSubClusterIds.getOrDefault(videoId, smallestSubClusterId);
                 issueClusterItemRepository.save(
                         IssueClusterItem.builder()
                                 .issueCluster(finalCluster)
-                                .youtubeVideoId(sc.candidate().getVideoId())
+                                .youtubeVideoId(videoId)
                                 .countryCode(resolveCountryCode(sc.candidate()))
                                 .similarityScore(sc.similarityScore())
                                 .isRepresentative(sc.isRepresentative())
                                 .rankNo(sc.rankNo())
+                                .subClusterId(subClusterId)
                                 .sourceType(IssueClusterItemSourceType.AUTO)
                                 .build()
                 );

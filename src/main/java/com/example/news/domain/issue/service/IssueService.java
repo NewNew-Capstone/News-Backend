@@ -256,12 +256,11 @@ public class IssueService {
                     .findFirst()
                     .orElse(null);
 
-            // 1차: 같은 서브클러스터 내 후보 (같은 서브토픽, 다른 나라)
+            // 1차: 같은 서브클러스터 내 후보
             if (mySubClusterId != null) {
                 candidateVideoIds = allItems.stream()
                         .filter(item -> !item.getYoutubeVideoId().equals(videoId))
                         .filter(item -> mySubClusterId.equals(item.getSubClusterId()))
-                        .filter(item -> item.getSimilarityScore() == null || item.getSimilarityScore() >= 0.3)
                         .map(IssueClusterItem::getYoutubeVideoId)
                         .distinct()
                         .toList();
@@ -273,7 +272,6 @@ public class IssueService {
             if (candidateVideoIds.isEmpty()) {
                 candidateVideoIds = allItems.stream()
                         .filter(item -> !item.getYoutubeVideoId().equals(videoId))
-                        .filter(item -> item.getSimilarityScore() == null || item.getSimilarityScore() >= 0.3)
                         .map(IssueClusterItem::getYoutubeVideoId)
                         .distinct()
                         .toList();
