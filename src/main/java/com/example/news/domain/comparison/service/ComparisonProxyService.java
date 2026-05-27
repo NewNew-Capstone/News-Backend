@@ -25,13 +25,18 @@ import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.reactive.function.client.WebClientException;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
 
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 @Slf4j
 @Service
 @RequiredArgsConstructor
 public class ComparisonProxyService {
+
+    private static final String DEMO_LOG_PREFIX = "[DEMO-COMPARE]";
 
     private final WebClient webClient;
     private final YoutubeVideoRepository youtubeVideoRepository;
@@ -78,6 +83,8 @@ public class ComparisonProxyService {
                     "keyword는 비어 있을 수 없습니다."
             );
         }
+        log.info("{} step=1 action=search_keyword_received keyword=\"{}\" limit={} proxy_path=/kg/search-videos",
+                DEMO_LOG_PREFIX, compactLogText(trimmedKeyword), limit);
         try {
             return webClient.get()
                     .uri(UriComponentsBuilder.fromUriString(pythonBaseUrl + "/kg/search-videos")
@@ -129,7 +136,25 @@ public class ComparisonProxyService {
         String keyword = requireNotBlank(request.keyword(), "keyword는 비어 있을 수 없습니다.");
         String selectedVideoId = requireNotBlank(request.video().videoId(), "video.videoId는 비어 있을 수 없습니다.");
         PythonClickedVideoRequest pythonRequest = PythonClickedVideoRequest.from(request, keyword);
+        PythonClickedVideoRequest.SelectedVideo selectedVideo = pythonRequest.selectedVideo();
         String path = "/kg/realtime-ingest/clicked-video";
+
+        log.info("{} step=2 action=clicked_video_selected video_id={} title=\"{}\" country_code={} language={} channel_name=\"{}\" published_at={}",
+                DEMO_LOG_PREFIX,
+                selectedVideo.videoId(),
+                compactLogText(selectedVideo.title()),
+                selectedVideo.countryCode(),
+                selectedVideo.language(),
+                compactLogText(selectedVideo.channelName()),
+                selectedVideo.publishedAt());
+        log.info("{} step=3 action=spring_to_python_payload path={} source_country={} source_video_id={} source_keyword=\"{}\" language={} title=\"{}\"",
+                DEMO_LOG_PREFIX,
+                path,
+                selectedVideo.countryCode(),
+                selectedVideo.videoId(),
+                compactLogText(keyword),
+                selectedVideo.language(),
+                compactLogText(selectedVideo.title()));
 
         try {
             PythonClickedVideoResponse response = webClient.post()
@@ -146,7 +171,9 @@ public class ComparisonProxyService {
                 );
             }
 
-            return toClickVideoCompareResponse(response, selectedVideoId);
+            ClickVideoCompareResponse result = toClickVideoCompareResponse(response, selectedVideoId);
+            logDemoGraphResponse(response, result);
+            return result;
         } catch (WebClientResponseException e) {
             log.warn("[ComparisonProxy] {} 호출 실패 - status={}, body={}",
                     path, e.getStatusCode(), e.getResponseBodyAsString());
@@ -246,6 +273,13 @@ public class ComparisonProxyService {
                     keywordKo, pythonBaseUrl, response.requestedKeyword(), java.time.OffsetDateTime.now());
             log.info("pipeline=comparison_collect requested_keyword=\"{}\" python_base_url={} expanded_ko={} expanded_en={} expanded_zh={} fallback_applied=false fallback_reason=none event_time={}",
                     keywordKo, pythonBaseUrl, ko, en, zh, java.time.OffsetDateTime.now());
+            log.info("{} step=4 action=multilingual_keyword_expansion source_keyword=\"{}\" chain=\"{}\" expanded_ko={} expanded_en={} expanded_zh={}",
+                    DEMO_LOG_PREFIX,
+                    compactLogText(keywordKo),
+                    String.join(" -> ", buildDemoExpansionTerms(keywordKo, ko, en, zh)),
+                    ko,
+                    en,
+                    zh);
 
             return new MultilingualKeywordExpandResponse(
                     response.requestedKeyword(),
@@ -313,6 +347,23 @@ public class ComparisonProxyService {
         return field;
     }
 
+    private void logDemoGraphResponse(PythonClickedVideoResponse response, ClickVideoCompareResponse result) {
+        ClickVideoCompareResponse.Graph graph = result.graph();
+        int nodeCount = graph == null ? 0 : graph.nodes().size();
+        int edgeCount = graph == null ? 0 : graph.edges().size();
+        int perspectiveCount = graph == null ? 0 : graph.countryPerspectives().size();
+        log.info("{} step=9 action=graph_response request_id={} selected_video_id={} status={} nodes={} edges={} country_perspectives={} queued_count={} skipped_existing_count={}",
+                DEMO_LOG_PREFIX,
+                response.requestId(),
+                result.selectedVideoId(),
+                result.status(),
+                nodeCount,
+                edgeCount,
+                perspectiveCount,
+                response.queuedCount(),
+                response.skippedExistingCount());
+    }
+
     private String requireNotBlank(String value, String message) {
         if (value == null || value.trim().isBlank()) {
             throw new ComparisonException(
@@ -330,5 +381,47 @@ public class ComparisonProxyService {
                 .map(String::trim)
                 .distinct()
                 .toList();
+    }
+
+    private List<String> buildDemoExpansionTerms(
+            String keyword,
+            List<String> ko,
+            List<String> en,
+            List<String> zh
+    ) {
+        String normalizedKeyword = keyword == null ? "" : keyword.trim();
+        if (normalizedKeyword.contains("트럼프") && normalizedKeyword.contains("대만")) {
+            return List.of("트럼프 대만", "트럼프", "대만", "trump", "taiwan", "特朗普", "台湾");
+        }
+
+        Set<String> terms = new LinkedHashSet<>();
+        if (!normalizedKeyword.isBlank()) {
+            terms.add(normalizedKeyword);
+        }
+        addAllNonBlank(terms, ko);
+        addAllNonBlank(terms, en);
+        addAllNonBlank(terms, zh);
+        return new ArrayList<>(terms);
+    }
+
+    private void addAllNonBlank(Set<String> terms, List<String> values) {
+        if (values == null) {
+            return;
+        }
+        values.stream()
+                .filter(value -> value != null && !value.isBlank())
+                .map(String::trim)
+                .forEach(terms::add);
+    }
+
+    private String compactLogText(String value) {
+        if (value == null) {
+            return "";
+        }
+        String compacted = value.replaceAll("\\s+", " ").trim();
+        if (compacted.length() <= 120) {
+            return compacted;
+        }
+        return compacted.substring(0, 117).trim() + "...";
     }
 }

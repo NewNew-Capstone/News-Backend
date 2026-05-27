@@ -21,7 +21,7 @@ public class CompareOnClickController {
 
     private final CompareOnClickService compareOnClickService;
 
-    @PostMapping({"/api/videos/compare-on-click", "/api/v1/comparison/compare-on-click"})
+    @PostMapping("/api/v1/comparison/compare-on-click")
     public ApiResponse<CompareOnClickResponse> compareOnClick(
             @Valid @RequestBody CompareOnClickRequest request,
             @RequestParam(required = false, defaultValue = "3") Integer limitPerCountry
