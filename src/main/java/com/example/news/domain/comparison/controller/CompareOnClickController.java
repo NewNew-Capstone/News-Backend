@@ -6,20 +6,28 @@ import com.example.news.domain.comparison.service.CompareOnClickService;
 import com.example.news.global.response.ApiResponse;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.client.RestClientException;
+import org.springframework.web.client.RestTemplate;
 
 import java.util.List;
 import java.util.Map;
 
+@Slf4j
 @RestController
 @RequiredArgsConstructor
 public class CompareOnClickController {
 
     private final CompareOnClickService compareOnClickService;
+
+    @Value("${python.kg.base-url:${python.base-url:http://127.0.0.1:8000}}")
+    private String pythonBaseUrl;
 
     @PostMapping("/api/v1/comparison/compare-on-click")
     public ApiResponse<CompareOnClickResponse> compareOnClick(
@@ -39,6 +47,11 @@ public class CompareOnClickController {
 
     @PostMapping("/api/v1/comparison/llm-difference")
     public ApiResponse<Map<String, Object>> llmDifference(@RequestBody Map<String, Object> request) {
+        Map<String, Object> pythonResponse = requestPythonLlmDifference(request);
+        if (pythonResponse != null && !pythonResponse.isEmpty()) {
+            return ApiResponse.ok(pythonResponse);
+        }
+
         Map<String, Object> selectedVideo = readMap(request.get("selectedVideo"));
         Map<String, Object> comparedVideo = readMap(request.get("comparedVideo"));
         Map<String, Object> relationEdge = readMap(request.get("relationEdge"));
@@ -65,8 +78,26 @@ public class CompareOnClickController {
                         comparedCountry + " 영상의 초점: " + comparedTitle,
                         "공유 키워드: " + keywordText
                 ),
-                "recommendationReason", reasonText
+                "recommendationReason", reasonText,
+                "llmUsed", false
         ));
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> requestPythonLlmDifference(Map<String, Object> request) {
+        try {
+            RestTemplate restTemplate = new RestTemplate();
+            Object response = restTemplate.postForObject(
+                    pythonBaseUrl + "/kg/llm-difference",
+                    request,
+                    Map.class
+            );
+            return response instanceof Map<?, ?> map ? (Map<String, Object>) map : Map.of();
+        } catch (RestClientException e) {
+            log.warn("[ComparisonLLM] Python LLM difference call failed. pythonBaseUrl={}, reason={}",
+                    pythonBaseUrl, e.getMessage());
+            return Map.of();
+        }
     }
 
     @SuppressWarnings("unchecked")
