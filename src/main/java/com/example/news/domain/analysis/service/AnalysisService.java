@@ -54,6 +54,16 @@ import java.util.stream.Collectors;
 @Service
 @RequiredArgsConstructor
 public class AnalysisService {
+    private static final List<String> SCORE_REASON_FALLBACK_PREFIXES = List.of(
+            "이 영상은 사실을 전달하는 문장이 비교적 많아",
+            "이 영상은 일부 문장에서 보도자의 해석이나 주장이 나타나",
+            "이 영상은 사실 전달과 보도자의 해석이나 주장이 함께 나타나"
+    );
+
+    private static final List<String> SUMMARY_FALLBACK_PREFIXES = List.of(
+            "영상 요약이 아직 생성되지 않았습니다",
+            "[LLM 안 탐]"
+    );
 
     private final AnalysisJobRepository analysisJobRepository;
     private final ContentSentenceRepository contentSentenceRepository;
@@ -119,6 +129,24 @@ public class AnalysisService {
         }
     }
 
+    public void enrichDisplayTextIfNeeded(BiasAnalysisResult result, YoutubeTranscript transcript) {
+        if (transcript == null) {
+            enrichScoreReasonSummaryIfNeeded(result, "ko");
+            return;
+        }
+
+        if (needsSummaryTextEnrichment(result.getSummaryText())) {
+            enrichSummaryText(result, transcript);
+        }
+        enrichScoreReasonSummaryIfNeeded(result, transcript.getLanguageCode());
+    }
+
+    public void enrichScoreReasonSummaryIfNeeded(BiasAnalysisResult result, String language) {
+        if (needsScoreReasonSummaryEnrichment(result.getScoreReasonSummary())) {
+            enrichScoreReasonSummary(result, language);
+        }
+    }
+
     public void enrichScoreReasonSummary(BiasAnalysisResult result, String language) {
         try {
             ScoreReasonRequestDto request = new ScoreReasonRequestDto(
@@ -153,6 +181,22 @@ public class AnalysisService {
 
     private boolean hasText(String value) {
         return value != null && !value.trim().isEmpty();
+    }
+
+    private boolean needsSummaryTextEnrichment(String summaryText) {
+        if (!hasText(summaryText)) {
+            return true;
+        }
+        String normalized = summaryText.trim();
+        return SUMMARY_FALLBACK_PREFIXES.stream().anyMatch(normalized::startsWith);
+    }
+
+    private boolean needsScoreReasonSummaryEnrichment(String scoreReasonSummary) {
+        if (!hasText(scoreReasonSummary)) {
+            return true;
+        }
+        String normalized = scoreReasonSummary.trim();
+        return SCORE_REASON_FALLBACK_PREFIXES.stream().anyMatch(normalized::startsWith);
     }
 
     @Transactional

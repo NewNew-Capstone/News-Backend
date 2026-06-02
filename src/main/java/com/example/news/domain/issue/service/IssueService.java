@@ -299,21 +299,11 @@ public class IssueService {
         YoutubeVideo opposingVideo = youtubeVideoRepository.findById(opposing.getTargetId())
                 .orElseThrow(() -> new IssueException(IssueErrorCode.VIDEO_NOT_FOUND));
 
-        boolean needsSummary = opposing.getSummaryText() == null || opposing.getSummaryText().isBlank();
-        boolean needsScoreReason = opposing.getScoreReasonSummary() == null || opposing.getScoreReasonSummary().isBlank();
-
-        if (needsSummary) {
-            var opposingTranscript = youtubeTranscriptService.getOrFetchTranscriptEntity(
-                    opposingVideo.getYoutubeVideoId(),
-                    true
-            );
-            if (opposingTranscript != null) {
-                analysisService.enrichSummaryText(opposing, opposingTranscript);
-            }
-        }
-        if (needsScoreReason) {
-            analysisService.enrichScoreReasonSummary(opposing, "ko");
-        }
+        var opposingTranscript = youtubeTranscriptService.getOrFetchTranscriptEntity(
+                opposingVideo.getYoutubeVideoId(),
+                true
+        );
+        analysisService.enrichDisplayTextIfNeeded(opposing, opposingTranscript);
 
         List<String> keywords = biasAnalysisKeywordRepository
                 .findAllByBiasAnalysisResultId(opposing.getId())
