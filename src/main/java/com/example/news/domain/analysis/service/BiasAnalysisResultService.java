@@ -14,6 +14,8 @@ import com.example.news.domain.analysis.repository.BiasEvidenceRepository;
 import com.example.news.domain.analysis.repository.HighlightResultRepository;
 import com.example.news.domain.analysis.repository.HighlightSpanRepository;
 import com.example.news.domain.analysis.repository.SentenceBiasLabelRepository;
+import com.example.news.domain.content.repository.YoutubeTranscriptRepository;
+import com.example.news.domain.content.repository.YoutubeVideoRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -32,12 +34,17 @@ public class BiasAnalysisResultService {
     private final SentenceBiasLabelRepository sentenceBiasLabelRepository;
     private final HighlightResultRepository highlightResultRepository;
     private final HighlightSpanRepository highlightSpanRepository;
+    private final YoutubeVideoRepository youtubeVideoRepository;
+    private final YoutubeTranscriptRepository youtubeTranscriptRepository;
+    private final AnalysisService analysisService;
 
-    @Transactional(readOnly = true, noRollbackFor = AnalysisException.class)
+    @Transactional(noRollbackFor = AnalysisException.class)
     public AnalysisResultResponse getAnalysisResult(Long targetId) {
         BiasAnalysisResult result = biasAnalysisResultRepository
                 .findTopByTargetIdAndTargetTypeOrderByCreatedAtDesc(targetId, TargetType.YOUTUBE_VIDEO)
                 .orElseThrow(() -> new AnalysisException(AnalysisErrorCode.ANALYSIS_RESULT_NOT_FOUND));
+
+        enrichDisplayTextIfNeeded(result, targetId);
 
         var keywords = biasAnalysisKeywordRepository.findAllByBiasAnalysisResultId(result.getId())
                 .stream()
@@ -73,5 +80,14 @@ public class BiasAnalysisResultService {
                 .toList();
 
         return AnalysisResultConverter.toResponse(result, keywords, focusKeywords, sentenceLabels, evidences, highlightSpans);
+    }
+
+    private void enrichDisplayTextIfNeeded(BiasAnalysisResult result, Long targetId) {
+        youtubeVideoRepository.findById(targetId)
+                .flatMap(youtubeTranscriptRepository::findTopByYoutubeVideoOrderByCreatedAtDesc)
+                .ifPresentOrElse(
+                        transcript -> analysisService.enrichDisplayTextIfNeeded(result, transcript),
+                        () -> analysisService.enrichScoreReasonSummaryIfNeeded(result, "ko")
+                );
     }
 }

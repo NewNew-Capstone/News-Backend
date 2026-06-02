@@ -14,6 +14,10 @@ import com.example.news.domain.analysis.repository.BiasEvidenceRepository;
 import com.example.news.domain.analysis.repository.HighlightResultRepository;
 import com.example.news.domain.analysis.repository.HighlightSpanRepository;
 import com.example.news.domain.analysis.repository.SentenceBiasLabelRepository;
+import com.example.news.domain.content.entity.YoutubeTranscript;
+import com.example.news.domain.content.entity.YoutubeVideo;
+import com.example.news.domain.content.repository.YoutubeTranscriptRepository;
+import com.example.news.domain.content.repository.YoutubeVideoRepository;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
@@ -26,6 +30,7 @@ import java.util.Optional;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -52,6 +57,15 @@ class BiasAnalysisResultServiceTest {
     @Mock
     HighlightSpanRepository highlightSpanRepository;
 
+    @Mock
+    YoutubeVideoRepository youtubeVideoRepository;
+
+    @Mock
+    YoutubeTranscriptRepository youtubeTranscriptRepository;
+
+    @Mock
+    AnalysisService analysisService;
+
     @InjectMocks
     BiasAnalysisResultService service;
 
@@ -60,6 +74,15 @@ class BiasAnalysisResultServiceTest {
         // given
         AnalysisJob mockJob = mock(AnalysisJob.class);
         when(mockJob.getId()).thenReturn(10L);
+        YoutubeVideo video = YoutubeVideo.builder()
+                .youtubeVideoId("youtube-1")
+                .title("테스트 영상")
+                .build();
+        YoutubeTranscript transcript = YoutubeTranscript.builder()
+                .youtubeVideo(video)
+                .transcriptText("자막")
+                .languageCode("ko")
+                .build();
 
         BiasAnalysisResult mockResult = mock(BiasAnalysisResult.class);
         when(mockResult.getId()).thenReturn(1L);
@@ -68,6 +91,8 @@ class BiasAnalysisResultServiceTest {
 
         when(biasAnalysisResultRepository.findTopByTargetIdAndTargetTypeOrderByCreatedAtDesc(1L, TargetType.YOUTUBE_VIDEO))
                 .thenReturn(Optional.of(mockResult));
+        when(youtubeVideoRepository.findById(1L)).thenReturn(Optional.of(video));
+        when(youtubeTranscriptRepository.findTopByYoutubeVideoOrderByCreatedAtDesc(video)).thenReturn(Optional.of(transcript));
         when(biasAnalysisKeywordRepository.findAllByBiasAnalysisResultId(1L)).thenReturn(List.of());
         when(biasAnalysisFocusKeywordRepository.findAllByBiasAnalysisResultId(1L)).thenReturn(List.of(
                 BiasAnalysisFocusKeyword.builder()
@@ -95,6 +120,43 @@ class BiasAnalysisResultServiceTest {
         assertThat(response.sentenceLabels()).isEmpty();
         assertThat(response.evidences()).isEmpty();
         assertThat(response.highlightSpans()).isEmpty();
+        verify(analysisService).enrichDisplayTextIfNeeded(mockResult, transcript);
+    }
+
+    @Test
+    void getAnalysisResult_enrichesDisplayText_whenSummaryTextIsEmpty() {
+        // given
+        YoutubeVideo video = YoutubeVideo.builder()
+                .youtubeVideoId("youtube-1")
+                .title("테스트 영상")
+                .build();
+        YoutubeTranscript transcript = YoutubeTranscript.builder()
+                .youtubeVideo(video)
+                .transcriptText("자막")
+                .languageCode("ko")
+                .build();
+
+        BiasAnalysisResult mockResult = mock(BiasAnalysisResult.class);
+        when(mockResult.getId()).thenReturn(1L);
+        when(mockResult.getTargetId()).thenReturn(1L);
+        when(mockResult.getSummaryText()).thenReturn("");
+        when(mockResult.getAnalysisJob()).thenReturn(null);
+
+        when(biasAnalysisResultRepository.findTopByTargetIdAndTargetTypeOrderByCreatedAtDesc(1L, TargetType.YOUTUBE_VIDEO))
+                .thenReturn(Optional.of(mockResult));
+        when(youtubeVideoRepository.findById(1L)).thenReturn(Optional.of(video));
+        when(youtubeTranscriptRepository.findTopByYoutubeVideoOrderByCreatedAtDesc(video)).thenReturn(Optional.of(transcript));
+        when(biasAnalysisKeywordRepository.findAllByBiasAnalysisResultId(1L)).thenReturn(List.of());
+        when(biasAnalysisFocusKeywordRepository.findAllByBiasAnalysisResultId(1L)).thenReturn(List.of());
+        when(biasEvidenceRepository.findAllByBiasAnalysisResultId(1L)).thenReturn(List.of());
+        when(highlightResultRepository.findByBiasAnalysisResultId(1L)).thenReturn(Optional.empty());
+
+        // when
+        AnalysisResultResponse response = service.getAnalysisResult(1L);
+
+        // then
+        assertThat(response).isNotNull();
+        verify(analysisService).enrichDisplayTextIfNeeded(mockResult, transcript);
     }
 
     @Test
