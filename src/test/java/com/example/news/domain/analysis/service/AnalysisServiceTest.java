@@ -3,6 +3,7 @@ package com.example.news.domain.analysis.service;
 import com.example.news.domain.analysis.dto.BiasAnalysisResultResponse;
 import com.example.news.domain.analysis.dto.FocusKeywordDto;
 import com.example.news.domain.analysis.dto.SentenceResultResponse;
+import com.example.news.domain.analysis.dto.SummaryResponseDto;
 import com.example.news.domain.analysis.entity.AnalysisJob;
 import com.example.news.domain.analysis.entity.BiasAnalysisFocusKeyword;
 import com.example.news.domain.analysis.entity.BiasAnalysisResult;
@@ -191,6 +192,78 @@ class AnalysisServiceTest {
 
         assertThat(result.getStatus()).isEqualTo(JobStatus.FAILED);
         verifyNoInteractions(eventPublisher);
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void createAnalysisJobFromRawText_doesNotPersistSummaryFallbackText() {
+        AnalysisJob saved = AnalysisJob.builder()
+                .targetId(10L)
+                .targetType(TargetType.YOUTUBE_VIDEO)
+                .jobType(JobType.VIDEO_BIAS_ANALYSIS)
+                .status(JobStatus.PENDING)
+                .build();
+        when(analysisJobRepository.save(any())).thenReturn(saved);
+
+        BiasAnalysisResultResponse response = new BiasAnalysisResultResponse(
+                10L,
+                "YOUTUBE_VIDEO",
+                1L,
+                0.5,
+                0.4,
+                0.3,
+                0.2,
+                null,
+                null,
+                null,
+                null,
+                "reason",
+                "[LLM 안 됨] 영상 요약 생성에 실패했습니다.",
+                0.7,
+                "evidence",
+                Map.of("OPINION", 0.4),
+                List.of(),
+                List.of(),
+                List.of(),
+                List.of(),
+                List.of(),
+                List.of()
+        );
+        when(webClient.post()).thenReturn(requestBodyUriSpec);
+        when(requestBodyUriSpec.uri(anyString())).thenReturn(requestBodyUriSpec);
+        when(requestBodyUriSpec.bodyValue(any())).thenReturn(requestHeadersSpec);
+        when(requestHeadersSpec.retrieve()).thenReturn(responseSpec);
+        when(responseSpec.bodyToMono(BiasAnalysisResultResponse.class)).thenReturn(Mono.just(response));
+
+        BiasAnalysisResult savedResult = BiasAnalysisResult.builder().build();
+        when(biasAnalysisResultRepository.save(any())).thenReturn(savedResult);
+
+        analysisService.createAnalysisExecutionFromRawText(transcript(), true);
+
+        ArgumentCaptor<BiasAnalysisResult> resultCaptor = ArgumentCaptor.forClass(BiasAnalysisResult.class);
+        verify(biasAnalysisResultRepository).save(resultCaptor.capture());
+        assertThat(resultCaptor.getValue().getSummaryText()).isEmpty();
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void enrichSummaryText_ignoresSummaryFallbackText() {
+        BiasAnalysisResult result = BiasAnalysisResult.builder()
+                .id(1L)
+                .targetId(10L)
+                .summaryText("기존 요약")
+                .build();
+
+        when(webClient.post()).thenReturn(requestBodyUriSpec);
+        when(requestBodyUriSpec.uri(anyString())).thenReturn(requestBodyUriSpec);
+        when(requestBodyUriSpec.bodyValue(any())).thenReturn(requestHeadersSpec);
+        when(requestHeadersSpec.retrieve()).thenReturn(responseSpec);
+        when(responseSpec.bodyToMono(SummaryResponseDto.class))
+                .thenReturn(Mono.just(new SummaryResponseDto("[LLM 안 탐] 영상 요약 생성에 실패했습니다.")));
+
+        analysisService.enrichSummaryText(result, transcript());
+
+        assertThat(result.getSummaryText()).isEqualTo("기존 요약");
     }
 
     private YoutubeTranscript transcript() {

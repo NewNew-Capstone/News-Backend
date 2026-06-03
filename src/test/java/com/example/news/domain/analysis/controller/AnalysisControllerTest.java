@@ -106,6 +106,28 @@ class AnalysisControllerTest {
                 .andExpect(jsonPath("$.body.status").value("FAILED"));
     }
 
+    @Test
+    void analyze_hidesSummaryFallbackTextFromImmediateResponse() throws Exception {
+        YoutubeTranscript transcript = transcript();
+        AnalysisJob job = AnalysisJob.builder()
+                .id(100L)
+                .targetId(10L)
+                .targetType(TargetType.YOUTUBE_VIDEO)
+                .jobType(JobType.VIDEO_BIAS_ANALYSIS)
+                .status(JobStatus.SUCCESS)
+                .build();
+        when(youtubeTranscriptService.getOrFetchTranscriptEntity("abc123", true)).thenReturn(transcript);
+        when(analysisService.getOrCreateAnalysisExecutionResult(any(YoutubeTranscript.class)))
+                .thenReturn(new AnalysisService.AnalysisExecutionResult(
+                        job,
+                        pythonResponse("[LLM 안 됨] 영상 요약 생성에 실패했습니다.")
+                ));
+
+        mockMvc.perform(post("/api/v1/analysis/analyze/abc123"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.body.summary_text").value(""));
+    }
+
     private YoutubeTranscript transcript() {
         YoutubeVideo video = YoutubeVideo.builder()
                 .id(10L)
@@ -122,6 +144,10 @@ class AnalysisControllerTest {
     }
 
     private BiasAnalysisResultResponse pythonResponse() {
+        return pythonResponse("summary");
+    }
+
+    private BiasAnalysisResultResponse pythonResponse(String summaryText) {
         return new BiasAnalysisResultResponse(
                 10L,
                 "YOUTUBE_VIDEO",
@@ -135,7 +161,7 @@ class AnalysisControllerTest {
                 null,
                 null,
                 "reason",
-                "summary",
+                summaryText,
                 0.7,
                 "evidence",
                 Map.of("OPINION", 0.4),

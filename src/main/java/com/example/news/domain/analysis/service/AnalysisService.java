@@ -35,6 +35,7 @@ import com.example.news.domain.analysis.event.AnalysisCompletedEvent;
 import com.example.news.domain.analysis.repository.HighlightResultRepository;
 import com.example.news.domain.analysis.repository.HighlightSpanRepository;
 import com.example.news.domain.analysis.repository.SentenceBiasLabelRepository;
+import com.example.news.domain.analysis.util.SummaryTextSanitizer;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -58,11 +59,6 @@ public class AnalysisService {
             "이 영상은 사실을 전달하는 문장이 비교적 많아",
             "이 영상은 일부 문장에서 보도자의 해석이나 주장이 나타나",
             "이 영상은 사실 전달과 보도자의 해석이나 주장이 함께 나타나"
-    );
-
-    private static final List<String> SUMMARY_FALLBACK_PREFIXES = List.of(
-            "영상 요약이 아직 생성되지 않았습니다",
-            "[LLM 안 탐]"
     );
 
     private final AnalysisJobRepository analysisJobRepository;
@@ -120,7 +116,7 @@ public class AnalysisService {
                     .bodyToMono(SummaryResponseDto.class)
                     .block();
 
-            if (response != null && hasText(response.summaryText())) {
+            if (response != null && SummaryTextSanitizer.hasRealSummary(response.summaryText())) {
                 result.updateSummaryText(response.summaryText());
                 log.info("영상 요약 보강 완료 - resultId={}, videoId={}", result.getId(), result.getTargetId());
             }
@@ -187,8 +183,7 @@ public class AnalysisService {
         if (!hasText(summaryText)) {
             return true;
         }
-        String normalized = summaryText.trim();
-        return SUMMARY_FALLBACK_PREFIXES.stream().anyMatch(normalized::startsWith);
+        return SummaryTextSanitizer.isFallback(summaryText);
     }
 
     private boolean needsScoreReasonSummaryEnrichment(String scoreReasonSummary) {
@@ -289,7 +284,7 @@ public class AnalysisService {
                             .headlineBodyGapTail(result.headlineBodyGapTail())
                             .headlineBodyGapLabel(result.headlineBodyGapLabel())
                             .scoreReasonSummary(result.scoreReasonSummary())
-                            .summaryText(result.summaryText())
+                            .summaryText(SummaryTextSanitizer.clean(result.summaryText()))
                             .factRatio(result.factRatio())
                             .scoreEvidence(result.scoreEvidence())
                             .build()

@@ -2,6 +2,7 @@ package com.example.news.domain.analysis.dto;
 
 import com.example.news.domain.analysis.entity.AnalysisJob;
 import com.example.news.domain.analysis.enums.JobStatus;
+import com.example.news.domain.analysis.util.SummaryTextSanitizer;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.databind.PropertyNamingStrategies;
 import com.fasterxml.jackson.databind.annotation.JsonNaming;
@@ -100,7 +101,7 @@ public record AnalysisJobResponse(
                 analysisResult.headlineBodyGapTail(),
                 analysisResult.headlineBodyGapLabel(),
                 analysisResult.scoreReasonSummary(),
-                analysisResult.summaryText(),
+                SummaryTextSanitizer.clean(analysisResult.summaryText()),
                 analysisResult.factRatio(),
                 analysisResult.scoreEvidence(),
                 analysisResult.biasTypeScores(),

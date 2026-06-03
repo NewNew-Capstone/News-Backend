@@ -34,11 +34,11 @@ public class IssueController {
     }
 
     // 반대 관점 영상 조회
-    // 예: /api/v1/issues/opposing?videoId=1
+    // 예: /api/v1/issues/opposing?videoId=1 또는 /api/v1/issues/opposing?videoId={youtubeVideoId}
     @GetMapping("/opposing")
     public ResponseEntity<ApiResponse<OpposingVideoResponseDto>> opposing(
-            @RequestParam Long videoId) {
-        return ResponseEntity.ok(ApiResponse.ok(issueService.findOpposingVideo(videoId)));
+            @RequestParam String videoId) {
+        return ResponseEntity.ok(ApiResponse.ok(issueService.findOpposingVideoByRequestVideoId(videoId)));
     }
 
     @PostMapping("/curation/sets")
