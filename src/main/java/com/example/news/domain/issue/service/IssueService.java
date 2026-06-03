@@ -226,6 +226,30 @@ public class IssueService {
 
     // 반대 관점 영상 도출: 같은 IssueCluster 내에서 opinionScore 차이가 가장 큰 영상 반환
     @Transactional
+    public OpposingVideoResponseDto findOpposingVideoByRequestVideoId(String videoId) {
+        Long targetId = resolveVideoTargetId(videoId);
+        return findOpposingVideo(targetId);
+    }
+
+    private Long resolveVideoTargetId(String videoId) {
+        if (videoId == null || videoId.trim().isEmpty()) {
+            throw new IssueException(IssueErrorCode.VIDEO_NOT_FOUND, "videoId is blank");
+        }
+
+        String normalizedVideoId = videoId.trim();
+        try {
+            return Long.parseLong(normalizedVideoId);
+        } catch (NumberFormatException ignored) {
+            return youtubeVideoRepository.findByYoutubeVideoId(normalizedVideoId)
+                    .map(YoutubeVideo::getId)
+                    .orElseThrow(() -> new IssueException(
+                            IssueErrorCode.VIDEO_NOT_FOUND,
+                            "youtubeVideoId: " + normalizedVideoId
+                    ));
+        }
+    }
+
+    @Transactional
     public OpposingVideoResponseDto findOpposingVideo(Long videoId) {
         BiasAnalysisResult myResult = biasAnalysisResultRepository
                 .findTopByTargetIdAndTargetTypeOrderByCreatedAtDesc(videoId, TargetType.YOUTUBE_VIDEO)

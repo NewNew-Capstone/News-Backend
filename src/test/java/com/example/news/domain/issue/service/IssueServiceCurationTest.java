@@ -6,11 +6,14 @@ import com.example.news.domain.analysis.repository.BiasAnalysisKeywordRepository
 import com.example.news.domain.analysis.repository.BiasAnalysisResultRepository;
 import com.example.news.domain.analysis.service.AnalysisService;
 import com.example.news.domain.content.entity.YoutubeVideo;
+import com.example.news.domain.content.repository.YoutubeVideoKeywordRepository;
 import com.example.news.domain.content.repository.YoutubeVideoRepository;
 import com.example.news.domain.content.service.YoutubeSearchService;
+import com.example.news.domain.content.service.YoutubeTranscriptService;
 import com.example.news.domain.graph.service.IssueGraphSyncService;
 import com.example.news.domain.graph.service.VideoGraphSyncService;
 import com.example.news.domain.issue.dto.CurationDto;
+import com.example.news.domain.issue.dto.OpposingVideoResponseDto;
 import com.example.news.domain.issue.entity.IssueCluster;
 import com.example.news.domain.issue.entity.IssueClusterItem;
 import com.example.news.domain.issue.enums.ClusterStatus;
@@ -43,6 +46,7 @@ class IssueServiceCurationTest {
     @Mock KeywordTranslationService keywordTranslationService;
     @Mock YoutubeSearchService youtubeSearchService;
     @Mock YoutubeVideoRepository youtubeVideoRepository;
+    @Mock YoutubeVideoKeywordRepository youtubeVideoKeywordRepository;
     @Mock IssueClusterRepository issueClusterRepository;
     @Mock IssueClusterItemRepository issueClusterItemRepository;
     @Mock ComparisonResultRepository comparisonResultRepository;
@@ -52,6 +56,7 @@ class IssueServiceCurationTest {
     @Mock IssueGraphSyncService issueGraphSyncService;
     @Mock VideoGraphSyncService videoGraphSyncService;
     @Mock AnalysisService analysisService;
+    @Mock YoutubeTranscriptService youtubeTranscriptService;
 
     @InjectMocks IssueService issueService;
 
@@ -136,5 +141,46 @@ class IssueServiceCurationTest {
         verify(issueGraphSyncService).syncIssue(eq(cluster), eq(items), any());
         verify(analysisService).triggerAnalysisAsync(21L);
         verify(analysisService).triggerAnalysisAsync(22L);
+    }
+
+    @Test
+    void findOpposingVideoByRequestVideoId_acceptsYoutubeVideoIdString() {
+        BiasAnalysisResult source = BiasAnalysisResult.builder()
+                .targetId(28L)
+                .targetType(TargetType.YOUTUBE_VIDEO)
+                .overallBiasScore(0.2)
+                .build();
+        BiasAnalysisResult opposing = BiasAnalysisResult.builder()
+                .id(2L)
+                .targetId(29L)
+                .targetType(TargetType.YOUTUBE_VIDEO)
+                .overallBiasScore(0.8)
+                .opinionScore(0.7)
+                .build();
+        YoutubeVideo sourceVideo = YoutubeVideo.builder()
+                .id(28L)
+                .youtubeVideoId("bG27BhaO3S4")
+                .build();
+        YoutubeVideo opposingVideo = YoutubeVideo.builder()
+                .id(29L)
+                .youtubeVideoId("opposing-video")
+                .title("반대 관점")
+                .build();
+
+        when(youtubeVideoRepository.findByYoutubeVideoId("bG27BhaO3S4")).thenReturn(Optional.of(sourceVideo));
+        when(biasAnalysisResultRepository.findTopByTargetIdAndTargetTypeOrderByCreatedAtDesc(28L, TargetType.YOUTUBE_VIDEO))
+                .thenReturn(Optional.of(source));
+        when(issueClusterItemRepository.findByYoutubeVideoId(28L)).thenReturn(List.of());
+        when(youtubeVideoKeywordRepository.findVideoIdsSharingKeywordWith(28L)).thenReturn(List.of(29L));
+        when(biasAnalysisResultRepository.findByTargetTypeAndTargetIdIn(TargetType.YOUTUBE_VIDEO, List.of(29L)))
+                .thenReturn(List.of(opposing));
+        when(youtubeVideoRepository.findById(29L)).thenReturn(Optional.of(opposingVideo));
+        when(biasAnalysisKeywordRepository.findAllByBiasAnalysisResultId(2L)).thenReturn(List.of());
+
+        OpposingVideoResponseDto result = issueService.findOpposingVideoByRequestVideoId("bG27BhaO3S4");
+
+        assertThat(result.getYoutubeVideoId()).isEqualTo("opposing-video");
+        verify(youtubeVideoRepository).findByYoutubeVideoId("bG27BhaO3S4");
+        verify(biasAnalysisResultRepository).findTopByTargetIdAndTargetTypeOrderByCreatedAtDesc(28L, TargetType.YOUTUBE_VIDEO);
     }
 }

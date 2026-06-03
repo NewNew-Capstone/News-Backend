@@ -9,6 +9,7 @@ import com.example.news.domain.analysis.entity.BiasEvidence;
 import com.example.news.domain.analysis.entity.HighlightSpan;
 import com.example.news.domain.analysis.entity.SentenceBiasLabel;
 import com.example.news.domain.analysis.enums.BiasKeywordType;
+import com.example.news.domain.analysis.util.SummaryTextSanitizer;
 
 import java.util.List;
 
@@ -92,7 +93,7 @@ public class AnalysisResultConverter {
                 result.getHeadlineBodyGapTail(),
                 result.getHeadlineBodyGapLabel(),
                 result.getScoreReasonSummary(),
-                result.getSummaryText(),
+                SummaryTextSanitizer.clean(result.getSummaryText()),
                 result.getFactRatio(),
                 result.getScoreEvidence(),
                 keywords,
