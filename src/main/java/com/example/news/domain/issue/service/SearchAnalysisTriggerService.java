@@ -79,9 +79,33 @@ public class SearchAnalysisTriggerService {
         if (!clusterMap.isEmpty()) {
             Map<Long, String> dbIdToYoutubeId = videos.stream()
                     .collect(Collectors.toMap(YoutubeVideo::getId, YoutubeVideo::getYoutubeVideoId));
+
+            // 혼자 남는 서브클러스터 영상 → 가장 영상 수 적은 클러스터로 재배치
+            Map<Integer, Long> clusterSizeMap = clusterMap.values().stream()
+                    .collect(Collectors.groupingBy(c -> c, Collectors.counting()));
+            Map<Integer, Long> multiVideoClusterSizeMap = clusterSizeMap.entrySet().stream()
+                    .filter(e -> e.getValue() > 1)
+                    .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
+
+            Map<String, Integer> mergedClusterMap = new java.util.HashMap<>(clusterMap);
+            if (!multiVideoClusterSizeMap.isEmpty()) {
+                Integer smallestClusterId = multiVideoClusterSizeMap.entrySet().stream()
+                        .min(Map.Entry.comparingByValue())
+                        .map(Map.Entry::getKey)
+                        .orElse(null);
+                if (smallestClusterId != null) {
+                    clusterMap.forEach((videoId, clusterId) -> {
+                        if (clusterSizeMap.getOrDefault(clusterId, 0L) == 1) {
+                            mergedClusterMap.put(videoId, smallestClusterId);
+                            log.info("singleton 서브클러스터 재배치: videoId={}, {} → {}", videoId, clusterId, smallestClusterId);
+                        }
+                    });
+                }
+            }
+
             for (IssueClusterItem item : savedItems) {
                 String youtubeVideoId = dbIdToYoutubeId.get(item.getYoutubeVideoId());
-                Integer subClusterId = clusterMap.get(youtubeVideoId);
+                Integer subClusterId = mergedClusterMap.get(youtubeVideoId);
                 if (subClusterId != null) {
                     item.updateSubClusterId(subClusterId);
                 }

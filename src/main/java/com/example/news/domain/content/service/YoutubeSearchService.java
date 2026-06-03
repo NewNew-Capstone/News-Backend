@@ -60,10 +60,16 @@ public class YoutubeSearchService {
     @Value("${ai-pipeline.base-url}")
     private String aiPipelineBaseUrl;
 
-    private static final int SHORTS_MAX_DURATION_SECONDS = 180; // YouTube Shorts 최대 3분
-    private static final int MIN_NEWS_DURATION_SECONDS = 60;    // 뉴스 영상 최소 1분
+    private static final int SHORTS_MAX_DURATION_SECONDS = 180;  // YouTube Shorts 최대 3분
+    private static final int MIN_NEWS_DURATION_SECONDS = 60;     // 뉴스 영상 최소 1분
+    private static final int MAX_NEWS_DURATION_SECONDS = 1200;   // 분석 시간 제한: 최대 20분
+    private static final int RANK_BUFFER_SIZE = 50;             // 필터 후 20개 확보를 위한 랭킹 버퍼
     private static final int FINAL_RESULT_SIZE = 20;
     private static final int CACHE_MIN_SIZE = 20; // DB 캐시 사용 최소 영상 수
+
+    // 폴백 단계별 조건 (단계가 높을수록 조건 완화)
+    private static final int[] FALLBACK_MONTHS   = {1, 3, 6};       // 기간: 1개월 → 3개월 → 6개월
+    private static final long[] FALLBACK_VIEWS   = {5000, 1000, 0}; // 조회수: 5000 → 1000 → 제한없음
 
     @Transactional
     public List<YoutubeVideoDto.VideoCard> search(String keyword, String sort) {
@@ -74,46 +80,60 @@ public class YoutubeSearchService {
             return cached;
         }
 
-        // 2. 캐시 미스 — YouTube에서 KR 50개 + US 50개 후보 snippet 수집
-        List<VideoRankDto.VideoItem> allSnippets = new ArrayList<>(searchSnippets(keyword));
+        // 2. 캐시 미스 — 폴백 단계별로 조건을 완화하며 20개 확보
+        //    1단계: 1개월 + 조회수 5000 이상
+        //    2단계: 3개월 + 조회수 1000 이상
+        //    3단계: 6개월 + 조회수 제한 없음
+        List<YoutubeVideo> filtered = List.of();
+        String usKeyword = null;
         try {
-            String usKeyword = titleTranslationService.translateFromKorean(keyword, "en");
-            List<VideoRankDto.VideoItem> usSnippets = searchSnippetsByRegion(usKeyword, "US", "en", null, null);
-            Set<String> existingIds = allSnippets.stream()
-                    .map(VideoRankDto.VideoItem::videoId)
-                    .collect(Collectors.toSet());
-            usSnippets.stream()
-                    .filter(s -> !existingIds.contains(s.videoId()))
-                    .forEach(allSnippets::add);
-            log.info("US 스니펫 수집 완료: keyword={}, usKeyword={}, us={}", keyword, usKeyword, usSnippets.size());
+            usKeyword = titleTranslationService.translateFromKorean(keyword, "en");
         } catch (Exception e) {
-            log.warn("US 영상 수집 실패, KR만 사용: {}", e.getMessage());
-        }
-        if (allSnippets.isEmpty()) {
-            return List.of();
+            log.warn("키워드 번역 실패, KR만 사용: {}", e.getMessage());
         }
 
-        // 3. Python 파이프라인: 코사인 유사도 기반 상위 30개 ID 반환 (숏폼 필터 버퍼)
-        List<VideoRankDto.RankedVideo> ranked = rankVideoIds(keyword, allSnippets);
-        List<String> top30Ids = ranked.stream().map(VideoRankDto.RankedVideo::videoId).toList();
-        if (top30Ids.isEmpty()) {
-            return List.of();
+        for (int step = 0; step < FALLBACK_MONTHS.length; step++) {
+            int months = FALLBACK_MONTHS[step];
+            long minViews = FALLBACK_VIEWS[step];
+            LocalDateTime publishedAfter = LocalDateTime.now().minusMonths(months);
+
+            List<VideoRankDto.VideoItem> allSnippets = new ArrayList<>(searchSnippets(keyword, publishedAfter));
+            if (usKeyword != null) {
+                try {
+                    List<VideoRankDto.VideoItem> usSnippets = searchSnippetsByRegion(usKeyword, "US", "en", null, null);
+                    Set<String> existingIds = allSnippets.stream()
+                            .map(VideoRankDto.VideoItem::videoId)
+                            .collect(Collectors.toSet());
+                    usSnippets.stream()
+                            .filter(s -> !existingIds.contains(s.videoId()))
+                            .forEach(allSnippets::add);
+                } catch (Exception e) {
+                    log.warn("US 영상 수집 실패 (step={}): {}", step, e.getMessage());
+                }
+            }
+            if (allSnippets.isEmpty()) continue;
+
+            List<String> topIds = rankVideoIds(keyword, allSnippets).stream()
+                    .map(VideoRankDto.RankedVideo::videoId)
+                    .toList();
+            if (topIds.isEmpty()) continue;
+
+            List<YoutubeVideo> videos = fetchAndSaveVideos(topIds);
+            filtered = topIds.stream()
+                    .map(id -> videos.stream()
+                            .filter(v -> v.getYoutubeVideoId().equals(id))
+                            .findFirst().orElse(null))
+                    .filter(Objects::nonNull)
+                    .filter(v -> !isShorts(v))
+                    .filter(v -> !isTooLong(v))
+                    .filter(v -> minViews == 0 || (v.getViewCount() != null && v.getViewCount() >= minViews))
+                    .limit(FINAL_RESULT_SIZE)
+                    .collect(Collectors.toList());
+
+            log.info("search fallback step={}, months={}, minViews={}, result={}", step, months, minViews, filtered.size());
+
+            if (filtered.size() >= FINAL_RESULT_SIZE) break;
         }
-
-        // 4. 상위 30개 상세 조회 + DB 저장
-        List<YoutubeVideo> videos = fetchAndSaveVideos(top30Ids);
-
-        // 5. 숏폼 제거 후 랭킹 순서 유지하며 최대 20개 반환
-        //    조건: 180초 이하 AND 제목/설명에 #Shorts 포함 → 제거
-        List<YoutubeVideo> filtered = top30Ids.stream()
-                .map(videoId -> videos.stream()
-                        .filter(v -> v.getYoutubeVideoId().equals(videoId))
-                        .findFirst()
-                        .orElse(null))
-                .filter(Objects::nonNull)
-                .filter(v -> !isShorts(v))
-                .limit(FINAL_RESULT_SIZE)
-                .collect(Collectors.toList());
 
         translateTitlesIfNeeded(filtered);
         linkKeywordToVideos(keyword, filtered);
@@ -128,41 +148,54 @@ public class YoutubeSearchService {
                 .collect(Collectors.toList());
     }
 
-    // DB 캐시 조회 — 키워드로 연결된 영상이 CACHE_MIN_SIZE 이상이면 재랭킹 후 반환, 아니면 null
+    // DB 캐시 조회 — 폴백 단계별로 조건 완화하며 20개 확보, 부족하면 null 반환해 신규 검색으로 위임
     private List<YoutubeVideoDto.VideoCard> searchFromCache(String keyword) {
         String normalized = keyword.trim().toLowerCase();
         return keywordRepository.findByNormalizedKeyword(normalized)
                 .map(keywordEntity -> {
-                    List<YoutubeVideo> cachedVideos = youtubeVideoKeywordRepository
+                    List<YoutubeVideo> allCached = youtubeVideoKeywordRepository
                             .findByKeyword(keywordEntity)
                             .stream()
                             .map(YoutubeVideoKeyword::getYoutubeVideo)
+                            .filter(v -> !isTooLong(v))
                             .collect(Collectors.toList());
 
-                    if (cachedVideos.size() < CACHE_MIN_SIZE) {
-                        return null; // 캐시 부족 → 신규 검색
+                    List<YoutubeVideo> finalVideos = List.of();
+                    for (int step = 0; step < FALLBACK_MONTHS.length; step++) {
+                        int months = FALLBACK_MONTHS[step];
+                        long minViews = FALLBACK_VIEWS[step];
+                        LocalDateTime cutoff = LocalDateTime.now().minusMonths(months);
+
+                        List<YoutubeVideo> candidates = allCached.stream()
+                                .filter(v -> v.getPublishedAt() != null && v.getPublishedAt().isAfter(cutoff))
+                                .filter(v -> minViews == 0 || (v.getViewCount() != null && v.getViewCount() >= minViews))
+                                .collect(Collectors.toList());
+
+                        if (candidates.size() < CACHE_MIN_SIZE) continue;
+
+                        List<VideoRankDto.VideoItem> snippets = candidates.stream()
+                                .map(v -> new VideoRankDto.VideoItem(
+                                        v.getYoutubeVideoId(),
+                                        v.getTitle() != null ? v.getTitle() : "",
+                                        v.getDescription() != null ? v.getDescription() : ""
+                                ))
+                                .collect(Collectors.toList());
+
+                        List<VideoRankDto.RankedVideo> ranked = rankVideoIds(keyword, snippets);
+                        finalVideos = ranked.stream()
+                                .map(r -> candidates.stream()
+                                        .filter(v -> v.getYoutubeVideoId().equals(r.videoId()))
+                                        .findFirst().orElse(null))
+                                .filter(Objects::nonNull)
+                                .filter(v -> !isShorts(v))
+                                .limit(FINAL_RESULT_SIZE)
+                                .collect(Collectors.toList());
+
+                        log.info("cache fallback step={}, months={}, minViews={}, result={}", step, months, minViews, finalVideos.size());
+                        if (finalVideos.size() >= FINAL_RESULT_SIZE) break;
                     }
 
-                    // 캐시된 영상을 임베딩으로 재랭킹
-                    List<VideoRankDto.VideoItem> snippets = cachedVideos.stream()
-                            .map(v -> new VideoRankDto.VideoItem(
-                                    v.getYoutubeVideoId(),
-                                    v.getTitle() != null ? v.getTitle() : "",
-                                    v.getDescription() != null ? v.getDescription() : ""
-                            ))
-                            .collect(Collectors.toList());
-
-                    List<VideoRankDto.RankedVideo> cachedRanked = rankVideoIds(keyword, snippets);
-
-                    List<YoutubeVideo> finalVideos = cachedRanked.stream()
-                            .map(r -> cachedVideos.stream()
-                                    .filter(v -> v.getYoutubeVideoId().equals(r.videoId()))
-                                    .findFirst()
-                                    .orElse(null))
-                            .filter(Objects::nonNull)
-                            .filter(v -> !isShorts(v))
-                            .limit(FINAL_RESULT_SIZE)
-                            .collect(Collectors.toList());
+                    if (finalVideos.isEmpty()) return null; // 캐시로 20개 불가 → 신규 검색
 
                     AnalysisService analysisService = analysisServiceProvider.getIfAvailable();
                     if (analysisService != null) {
@@ -177,7 +210,7 @@ public class YoutubeSearchService {
     }
 
     // YouTube search.list 호출 — snippet(title+description) 포함하여 50개 반환
-    private List<VideoRankDto.VideoItem> searchSnippets(String keyword) {
+    private List<VideoRankDto.VideoItem> searchSnippets(String keyword, LocalDateTime publishedAfter) {
         try {
             YouTube.Search.List searchRequest = youtubeClient.search().list(List.of("snippet"));
             searchRequest.setKey(apiKey);
@@ -185,6 +218,7 @@ public class YoutubeSearchService {
             searchRequest.setType(List.of("video"));
             searchRequest.setMaxResults(50L);
             searchRequest.setOrder("date"); // YouTube 알고리즘 개입 제거, 중립적 후보 수집
+            searchRequest.setPublishedAfter(publishedAfter.toInstant(ZoneOffset.UTC).toString());
 
             String trimmedKeyword = keyword == null ? "" : keyword.trim();
             if (trimmedKeyword.length() > 2) {
@@ -208,7 +242,7 @@ public class YoutubeSearchService {
     // Python 파이프라인 호출 — 코사인 유사도 기반 상위 30개 (video_id + score) 반환
     private List<VideoRankDto.RankedVideo> rankVideoIds(String keyword, List<VideoRankDto.VideoItem> snippets) {
         try {
-            VideoRankDto.Request request = new VideoRankDto.Request(keyword, snippets, 30);
+            VideoRankDto.Request request = new VideoRankDto.Request(keyword, snippets, RANK_BUFFER_SIZE);
             VideoRankDto.Response response = restTemplate.postForObject(
                     aiPipelineBaseUrl + "/content/rank-videos",
                     request,
@@ -403,6 +437,12 @@ public class YoutubeSearchService {
                 .orElseGet(() -> youtubeVideoRepository.save(YoutubeConverter.toYoutubeVideoEntity(video)));
         videoGraphSyncService.syncVideoNow(saved);
         return saved;
+    }
+
+    // 20분 초과 영상 제외 — 분석 파이프라인 처리 시간 제한
+    private boolean isTooLong(YoutubeVideo video) {
+        return video.getDurationSeconds() != null
+                && video.getDurationSeconds() > MAX_NEWS_DURATION_SECONDS;
     }
 
     // 뉴스 영상 부적합 판별 — 1분 미만이거나, 3분 이하이면서 #Shorts 태그 포함된 경우
